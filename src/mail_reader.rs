@@ -9,7 +9,7 @@ impl App {
         let (mut close,mut link)=(false,None);
         let mut toggle=None;
         ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("daozai-mail-reader"),
-            egui::ViewportBuilder::default().with_title("邮件全文 · 岛仔").with_inner_size([700.0,620.0]).with_min_inner_size([500.0,380.0]),|ctx,_|{
+            egui::ViewportBuilder::default().with_title("邮件全文 · WELL岛").with_inner_size([700.0,620.0]).with_min_inner_size([500.0,380.0]),|ctx,_|{
             if focus{ctx.send_viewport_cmd(egui::ViewportCommand::Focus);}
             close=ctx.input(|i|i.viewport().close_requested());
             egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(25,25,27)).inner_margin(22)).show(ctx,|ui|{

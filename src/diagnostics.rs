@@ -8,7 +8,7 @@ fn write_report(directory: &Path, title: &str, details: &str) -> std::io::Result
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     std::fs::write(&path, format!(
-        "岛仔 {}\n系统：{} / {}\n时间（Unix 秒）：{timestamp}\n{title}\n{details}\n",
+        "WELL岛 {}\n系统：{} / {}\n时间（Unix 秒）：{timestamp}\n{title}\n{details}\n",
         env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH,
     ))?;
     Ok(path)
@@ -28,7 +28,7 @@ pub fn report(title: &str, details: &str) {
         use windows::core::{w, PCWSTR};
         use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
         let wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-        unsafe { MessageBoxW(None, PCWSTR(wide.as_ptr()), w!("岛仔"), MB_OK | MB_ICONERROR); }
+        unsafe { MessageBoxW(None, PCWSTR(wide.as_ptr()), w!("WELL岛"), MB_OK | MB_ICONERROR); }
     }
     #[cfg(not(windows))]
     eprintln!("{text}");
@@ -39,7 +39,7 @@ pub fn install() {
         // 不写入 panic 的数据载荷，避免把邮件、凭据或登录信息带进日志。
         let location = info.location().map(|p| format!("{}:{}:{}", p.file(), p.line(), p.column()))
             .unwrap_or_else(|| "未知".into());
-        report("岛仔发生异常，请重新启动。", &format!(
+        report("WELL岛 发生异常，请重新启动。", &format!(
             "代码位置：{location}\n调用栈：\n{}", std::backtrace::Backtrace::force_capture(),
         ));
     }));

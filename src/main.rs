@@ -452,7 +452,7 @@ fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            diagnostics::report("岛仔启动或运行失败。", &error.to_string());
+            diagnostics::report("WELL岛 启动或运行失败。", &error.to_string());
             std::process::ExitCode::FAILURE
         }
     }
@@ -467,7 +467,7 @@ fn run() -> eframe::Result<()> {
         return Ok(());
     }
     let viewport = egui::ViewportBuilder::default()
-        .with_title("岛仔").with_icon(daozai::theme::app_icon())
+        .with_title("WELL岛").with_icon(daozai::theme::app_icon())
         .with_inner_size([app::CANVAS_W, app::WIN_H])
         .with_decorations(false)
         .with_transparent(true)
@@ -477,5 +477,5 @@ fn run() -> eframe::Result<()> {
         .with_always_on_top()
         .with_visible(false);
     let opts = eframe::NativeOptions { viewport, vsync: !cfg!(windows), ..Default::default() };
-    eframe::run_native("岛仔", opts, Box::new(|cc| Ok(Box::new(Shell::new(cc)))))
+    eframe::run_native("WELL岛", opts, Box::new(|cc| Ok(Box::new(Shell::new(cc)))))
 }

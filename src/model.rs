@@ -21,7 +21,7 @@ pub fn config_dir() -> PathBuf {
     if let Ok(root) = std::env::var("DAOZAI_DATA_DIR") {
         return PathBuf::from(root);
     }
-    env_dir("APPDATA").join("Daozai")
+    env_dir("APPDATA").join("wellshijian")
 }
 
 fn read_kv(path: &Path) -> Vec<(String, String)> {

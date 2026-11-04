@@ -2,9 +2,9 @@
 use eframe::egui;
 use std::{io::{Read, Write}, path::PathBuf, sync::{mpsc::{self, Receiver}, Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 
-const REPOSITORY: &str = "https://github.com/Renly1994/xiaotang-daozai";
-const API: &str = "https://api.github.com/repos/Renly1994/xiaotang-daozai/releases/latest";
-const RELEASES: &str = "https://github.com/Renly1994/xiaotang-daozai/releases/latest";
+const REPOSITORY: &str = "https://github.com/wellshijian/welldao";
+const API: &str = "https://api.github.com/repos/wellshijian/welldao/releases/latest";
+const RELEASES: &str = "https://github.com/wellshijian/welldao/releases/latest";
 
 #[derive(Clone, Debug)]
 struct Release { version: String, notes: String, page: String, package: Option<Package> }
@@ -108,7 +108,7 @@ impl State {
         }).id();
         let installing = self.rx.is_some() && self.cancel.is_none();
         ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("daozai-update"),
-            egui::ViewportBuilder::default().with_title("岛仔更新").with_icon(theme::app_icon())
+            egui::ViewportBuilder::default().with_title("WELL岛 更新").with_icon(theme::app_icon())
                 .with_inner_size([520.0, 416.0]).with_resizable(false).with_decorations(false)
                 .with_transparent(true).with_active(true), |ctx, _| {
                 if focus {
@@ -150,7 +150,7 @@ impl State {
                             ui.image((logo,egui::vec2(52.0,52.0)));
                             ui.add_space(4.0);
                             ui.vertical(|ui| {
-                                ui.label(egui::RichText::new("岛仔有新版本了").font(theme::font(21.0,W::Semibold)));
+                                ui.label(egui::RichText::new("WELL岛 有新版本了").font(theme::font(21.0,W::Semibold)));
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(env!("CARGO_PKG_VERSION")).color(theme::DIM));
                                     ui.label(egui::RichText::new("→").color(theme::DIM));
@@ -229,7 +229,7 @@ fn clip_update_window(rect: egui::Rect, scale: f32) {
     unsafe extern "system" fn visit(hwnd: HWND, data: LPARAM) -> BOOL {
         let mut title = [0u16; 64];
         let len = GetWindowTextW(hwnd, &mut title) as usize;
-        if String::from_utf16_lossy(&title[..len]) != "岛仔更新" { return BOOL(1); }
+        if String::from_utf16_lossy(&title[..len]) != "WELL岛 更新" { return BOOL(1); }
         let &(rect, scale) = &*(data.0 as *const (egui::Rect, f32));
         let region = update_window_region(rect, scale);
         let old = CreateRectRgn(0, 0, 0, 0);
@@ -268,7 +268,7 @@ fn check() -> Result<Option<Release>, String> {
 
 fn release_info(value: &serde_json::Value, current: &str) -> Result<Option<Release>, String> {
     let Some(tag) = parse_release(value, current)? else { return Ok(None); };
-    let name = format!("Daozai-v{}-windows-x64.zip", tag.trim_start_matches('v'));
+    let name = "wellshijian-portable.zip".to_string();
     let expected = format!("{REPOSITORY}/releases/download/{tag}/{name}");
     let package = value["assets"].as_array().and_then(|assets| assets.iter().find(|asset| asset["name"] == name))
         .and_then(|asset| {
@@ -284,7 +284,7 @@ fn release_info(value: &serde_json::Value, current: &str) -> Result<Option<Relea
 
 fn download(release: &Release, tx: &mpsc::Sender<Event>, cancel: &AtomicBool) -> Result<PathBuf, String> {
     let package = release.package.as_ref().ok_or("请通过浏览器下载此版本")?;
-    let root = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).ok_or("无法找到更新缓存目录")?.join("Daozai/Updates");
+    let root = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).ok_or("无法找到更新缓存目录")?.join("wellshijian/Updates");
     let work = root.join(format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
     std::fs::create_dir_all(&work).map_err(|_| "无法创建更新缓存")?;
     let result = (|| {

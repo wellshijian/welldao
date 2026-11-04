@@ -307,7 +307,7 @@ pub fn connect() -> Result<Receiver<Incoming>> {
                     current.insert(id);
                     if !first && !seen.contains(&id) {
                         if let Ok((app, id, body)) = notification_text(&n) {
-                            if app != "岛仔" && !body.is_empty() {
+                            if app != "WELL岛" && !body.is_empty() {
                                 if tx.send(Incoming::Message(app, id, body)).is_err() {
                                     return Ok(());
                                 }
