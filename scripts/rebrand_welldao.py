@@ -204,4 +204,19 @@ replace_in_file("installer/setup.nsi", [
     ('ReadRegStr $0 HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "${APP_ID}"\n  ${If} $0 == \'"$INSTDIR\\daozai.exe"\'', 'ReadRegStr $0 HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "${APP_ID}"\n  ${If} $0 == \'"$INSTDIR\\wellshijian.exe"\''),
 ])
 
+# 12. Fallback sweep across all src/*.rs and installer/* so any newly added upstream UI text with 岛仔/岛崽 is automatically replaced with WELL岛
+for root_sub in ["src", "installer"]:
+    folder = os.path.join(base_dir, root_sub)
+    if not os.path.isdir(folder):
+        continue
+    for fname in os.listdir(folder):
+        if fname == "ui_tests.rs":
+            continue
+        if fname.endswith((".rs", ".ps1", ".nsi")):
+            replace_in_file(f"{root_sub}/{fname}", [
+                ("岛仔 Daozai", "WELL岛"),
+                ("岛仔", "WELL岛"),
+                ("岛崽", "WELL岛"),
+            ])
+
 print("rebrand_welldao.py finished successfully.")

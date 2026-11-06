@@ -88,7 +88,7 @@ mod tests {
     }
 }
 
-/// 只有岛仔所在屏幕的前台全屏窗口才触发隐藏。
+/// 只有WELL岛所在屏幕的前台全屏窗口才触发隐藏。
 pub fn hide_for_fullscreen(enabled:bool,fullscreen:Option<Bounds>,island:Option<Bounds>)->bool {
     enabled && fullscreen.is_some() && fullscreen==island
 }

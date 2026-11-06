@@ -8,8 +8,11 @@ try {
     
     if (-not $SkipBuild) {
         Write-Host "Building release binary wellshijian.exe..."
+        $ErrorActionPreference = 'Continue'
         cargo build --release --bin wellshijian
-        if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+        $exitCode = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($exitCode -ne 0) { throw 'Release build failed' }
     }
     
     $Executable = Join-Path $projectRoot 'target\release\wellshijian.exe'
@@ -22,6 +25,16 @@ try {
     $binary = Get-Item -LiteralPath $Executable
     Write-Host "Found binary: $($binary.FullName) ($($binary.Length) bytes)"
     
+    if (-not (Test-Path -LiteralPath $NsisCompiler)) {
+        $nsisDir = Join-Path $projectRoot 'target\nsis'
+        $cachedNsis = Join-Path $nsisDir 'nsis-3.13\makensis.exe'
+        if (Test-Path -LiteralPath $cachedNsis) {
+            $NsisCompiler = $cachedNsis
+        } else {
+            New-Item -ItemType Directory -Path $nsisDir -Force | Out-Null
+            $NsisCompiler = & (Join-Path $PSScriptRoot 'get-nsis.ps1') -Directory $nsisDir
+        }
+    }
     if (-not (Test-Path -LiteralPath $NsisCompiler)) { throw "NSIS compiler not found at $NsisCompiler" }
     
     if (-not $OutputDirectory) { $OutputDirectory = Join-Path $projectRoot 'dist' }
@@ -49,8 +62,11 @@ try {
     $setup = Join-Path $outputDirectory "wellshijian-Setup.exe"
     if (Test-Path -LiteralPath $setup) { Remove-Item -LiteralPath $setup -Force }
     Write-Host "Compiling installer with NSIS..."
+    $ErrorActionPreference = 'Continue'
     & $NsisCompiler /INPUTCHARSET UTF8 /V2 /WX "/DAPP_VERSION=$version" "/DPROJECT_DIR=$projectRoot" "/DSOURCE_EXE=$($binary.FullName)" "/DOUTPUT_FILE=$setup" (Join-Path $projectRoot 'installer\setup.nsi')
-    if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($exitCode -ne 0) { throw 'Installer build failed' }
     Write-Host "Created installer: $setup"
     
     # 3. Checksums

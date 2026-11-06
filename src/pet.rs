@@ -1,4 +1,4 @@
-//! 岛仔的原生矢量表情与连续形变。
+//! WELL岛的原生矢量表情与连续形变。
 use crate::anim::{approach, lerp, smoothstep};
 use crate::paint::{Card, H};
 use crate::theme::{self, W};

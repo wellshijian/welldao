@@ -1038,8 +1038,8 @@ mod service {
                 match event {
                     Event::Status{status,..}=>println!("worker_status={status:?}"),
                     Event::Mail{new,item}=>{
-                        println!("worker_mail new={new} test_message={}",item.subject.starts_with("岛仔"));
-                        if new && item.subject=="岛仔后台监听实测" {
+                        println!("worker_mail new={new} test_message={}",item.subject.starts_with("WELL岛"));
+                        if new && item.subject=="WELL岛后台监听实测" {
                             service.sync(&[],120);return;
                         }
                     },
@@ -1058,7 +1058,7 @@ mod service {
         let mut session=net::connect(&account,&password).unwrap();session.examine("INBOX").unwrap();
         let (tx,rx)=std::sync::mpsc::channel();recent(&mut session,&account,&tx).unwrap();
         let items=rx.try_iter().filter_map(|ev|if let Event::Mail{item,..}=ev{Some(item)}else{None}).collect::<Vec<_>>();
-        let invite=items.iter().find(|m|m.subject=="【岛仔测试】邮件日程邀请：收件箱合并验证").expect("测试邀请未到达");
+        let invite=items.iter().find(|m|m.subject=="【WELL岛测试】邮件日程邀请：收件箱合并验证").expect("测试邀请未到达");
         assert_eq!(invite.meeting.as_ref().unwrap().uid,"daozai-mail-test-20261103-1500");
         let plain=items.iter().find(|m|m.subject=="DAOZAI-DATE-TEST-20261103").expect("普通日期邮件未到达");
         assert!(plain.meeting.is_none());session.logout().unwrap();
@@ -1084,7 +1084,7 @@ mod service {
         for event in &initial {if let Event::Mail{item,..}=event{
             println!("subject_chars={} sender_chars={} body_bytes={} links={} max_link_chars={}",item.subject.chars().count(),item.from.chars().count(),item.summary.len(),item.links.len(),item.links.iter().map(|l|l.label.chars().count()).max().unwrap_or(0));
         }}
-        let received=initial.iter().any(|e|matches!(e,Event::Mail{item,..} if item.subject=="岛仔收信测试"&&item.code.as_deref()==Some("482731")&&!item.links.is_empty()));
+        let received=initial.iter().any(|e|matches!(e,Event::Mail{item,..} if item.subject=="WELL岛收信测试"&&item.code.as_deref()==Some("482731")&&!item.links.is_empty()));
         println!("test_message_with_code_and_link={received}");
         fetch_new(&mut session,account,&mut last,&tx).expect("增量收取失败");
         let added=rx.try_iter().count();

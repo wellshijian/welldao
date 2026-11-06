@@ -1,7 +1,7 @@
 //! 系统托盘、右键菜单与开机启动。
 //!
 //! 托盘行为：
-//! - `uID=1`，`uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP`，回调 `WM_APP+9`，提示 `岛仔`；
+//! - `uID=1`，`uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP`，回调 `WM_APP+9`，提示 `WELL岛`；
 //! - 图标取 exe 内 `RT_GROUP_ICON #1`，按 `SM_CXSMICON` 走 `LoadImageW`；
 //! - 左键、右键都弹同一个菜单，没有双击分支；
 //! - 菜单固定中文，含设置入口，前三项每次打开现算勾选态；
@@ -108,7 +108,7 @@ fn load_resource_icon() -> Option<HICON> {
     }
 }
 
-/// 图标取不到时，直接解析内嵌的岛仔 ICO。
+/// 图标取不到时，直接解析内嵌的WELL岛 ICO。
 fn load_embedded_icon() -> Option<HICON> {
     let ico: &[u8] = include_bytes!("../assets/daozai.ico");
     if ico.len() < 6 {
@@ -493,7 +493,7 @@ impl Drop for Tray {
     }
 }
 
-/// 单实例：已有岛仔实例时返回 false。
+/// 单实例：已有WELL岛实例时返回 false。
 pub fn single_instance() -> bool {
     unsafe {
         match CreateMutexW(None, false, MUTEX_NAME) {
@@ -638,7 +638,7 @@ fn request_existing_window(hwnd:HWND,calendar:bool)->bool {unsafe{
 
 pub fn activate_existing(calendar:bool)->bool {unsafe{
     let Ok(tray)=FindWindowW(w!("wellshijianTray"),PCWSTR::null()) else{return false;};
-    let Ok(window)=FindWindowW(PCWSTR::null(),w!("岛仔")) else{return false;};
+    let Ok(window)=FindWindowW(PCWSTR::null(),w!("WELL岛")) else{return false;};
     let(mut tray_pid,mut window_pid)=(0,0);
     GetWindowThreadProcessId(tray,Some(&mut tray_pid));
     GetWindowThreadProcessId(window,Some(&mut window_pid));

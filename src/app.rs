@@ -85,7 +85,7 @@ pub struct Env {
     /// 光标位置（与 `frame` 传入的 `win` 同一坐标系）；不在窗口附近时为 None。
     pub cursor: Option<Pos2>,
     pub idle_seconds: Option<f64>,
-    /// 前台浏览器的顶部是否与岛重叠；岛仔自身窗口或暂不可读时为 None。
+    /// 前台浏览器的顶部是否与岛重叠；WELL岛自身窗口或暂不可读时为 None。
     pub browser_at_top: Option<bool>,
     pub media: NowPlaying,
     /// 系统主音量（0..100, 是否静音）；v0.5.4 音量条与系统双向同步。

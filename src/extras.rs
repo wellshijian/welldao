@@ -1,4 +1,4 @@
-//! 设置、通知队列与岛仔表情。
+//! 设置、通知队列与WELL岛表情。
 use crate::settings_theme::color as settings_color;
 use crate::app::{App, Cmd, Phase, HUD_TRACK_W, HUD_TRACK_X, HUD_W, PAGE_NAMES};
 use crate::paint::{Card, H};
@@ -762,9 +762,9 @@ fn support_author(ui:&mut egui::Ui){
             });
         });
     ui.add_space(9.0);
-    ui.label(egui::RichText::new("小唐维护 · 岛仔陪伴").size(10.5).color(accent));
+    ui.label(egui::RichText::new("小唐维护 · WELL岛陪伴").size(10.5).color(accent));
     ui.label(egui::RichText::new("请小唐喝杯咖啡").size(19.0).strong());
-    ui.label("岛仔陪你认真生活，\n你的支持，陪小唐把它慢慢做好。");
+    ui.label("WELL岛陪你认真生活，\n你的支持，陪小唐把它慢慢做好。");
     } else {
         let ctx=ui.ctx().clone();
         ui.columns(2,|columns|{

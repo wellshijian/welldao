@@ -1139,7 +1139,7 @@ mod tests {
     fn live_calendar_test_samples() {
         let cfg=load_config().unwrap();let password=secrets::load(&cfg).unwrap();
         let month=fetch_month(&cfg,&password,NaiveDate::from_ymd_opt(2026,11,3).unwrap()).unwrap();
-        let samples=month.events.iter().filter(|m|m.title.starts_with("【岛仔测试】")).collect::<Vec<_>>();
+        let samples=month.events.iter().filter(|m|m.title.starts_with("【WELL岛测试】")).collect::<Vec<_>>();
         let repeated=samples.iter().filter(|m|m.title.contains("重复与取消验证")).collect::<Vec<_>>();
         assert_eq!(repeated.len(),2);
         assert_eq!(repeated.iter().map(|m|chrono::DateTime::from_timestamp(m.start,0).unwrap().with_timezone(&chrono::Local).day()).collect::<Vec<_>>(),vec![3,5]);
