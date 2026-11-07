@@ -222,7 +222,7 @@ fn open_unread_with_paths(unread:crate::app::Unread,paths:&[String])->Result<(),
                 else if window_pid(window)==unread.pid && usable_main_frame(window,unread.source) && matches(window,paths) {Some(window)}
                 else {account_main_window(unread.pid,unread.source,paths)};
             if let Some(target)=target {
-                // 异步恢复：微信卡住时也不能拖住岛仔的界面线程。
+                // 异步恢复：微信卡住时也不能拖住WELL岛的界面线程。
                 if IsIconic(target).as_bool(){ShowWindowAsync(target,SW_RESTORE).ok().map_err(|_|"请从任务栏打开微信".to_string())?;}
                 if SetForegroundWindow(target).as_bool(){return Ok(());}
             }
@@ -247,7 +247,7 @@ impl TrayLog {
         let key=w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
         let build=registry_string(HKEY_LOCAL_MACHINE,key,w!("CurrentBuild")).unwrap_or_default();
         let display=registry_string(HKEY_LOCAL_MACHINE,key,w!("DisplayVersion")).unwrap_or_default();
-        Self(vec![format!("岛仔 {} · Windows 内部版本 {build} ({display}) · 账号进程 {} · 闪动窗口 {:#x}",env!("CARGO_PKG_VERSION"),unread.pid,unread.window)])
+        Self(vec![format!("WELL岛 {} · Windows 内部版本 {build} ({display}) · 账号进程 {} · 闪动窗口 {:#x}",env!("CARGO_PKG_VERSION"),unread.pid,unread.window)])
     }
     fn step(&mut self,line:impl Into<String>){self.0.push(line.into());}
     /// 写入日志并返回给用户看的提示（带错误码，便于反馈）。
