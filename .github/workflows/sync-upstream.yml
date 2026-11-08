@@ -1,0 +1,130 @@
+name: 自动同步原版并发布 WELL岛 更新
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: '强制重新拉取原版最新版并打包发布'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+permissions:
+  contents: write
+
+jobs:
+  sync-and-release:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CARGO_BUILD_JOBS: 1
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 检查原版是否有新版本
+        id: check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $up = Invoke-RestMethod -Uri 'https://api.github.com/repos/Renly1994/xiaotang-daozai/releases/latest' -Headers @{ 'User-Agent' = 'wellshijian-sync' }
+          $upTag = $up.tag_name
+          $upNotes = $up.body
+          Write-Host "原版最新版本: $upTag"
+
+          $myTag = ''
+          try {
+            $my = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest" -Headers @{ 'User-Agent' = 'wellshijian-sync' }
+            $myTag = $my.tag_name
+          } catch {
+            $myTag = ''
+          }
+          Write-Host "当前 WELL岛 最新版本: $myTag"
+
+          $force = '${{ inputs.force_rebuild }}' -eq 'true'
+          if ($force -or ($upTag -and $upTag -ne $myTag)) {
+            "should_update=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "target_tag=$upTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            $upNotes | Set-Content -Path "$env:RUNNER_TEMP\release_notes.md" -Encoding utf8
+          } else {
+            "should_update=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "当前已是最新同步版本 ($myTag)，无需重新构建。"
+          }
+
+      - name: 同步原版源码并自动替换为 WELL岛 品牌与图标
+        if: steps.check.outputs.should_update == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '${{ steps.check.outputs.target_tag }}'
+          $backup = Join-Path $env:RUNNER_TEMP 'well-custom'
+          New-Item -ItemType Directory -Path "$backup\assets", "$backup\scripts", "$backup\workflows" -Force | Out-Null
+
+          Copy-Item -LiteralPath 'assets\well-brand.ico' -Destination "$backup\assets\well-brand.ico" -Force
+          Copy-Item -LiteralPath 'assets\well-brand.png' -Destination "$backup\assets\well-brand.png" -Force
+          Copy-Item -LiteralPath 'scripts\rebrand_welldao.py' -Destination "$backup\scripts\rebrand_welldao.py" -Force
+          Copy-Item -LiteralPath 'scripts\package_well.ps1' -Destination "$backup\scripts\package_well.ps1" -Force
+          Copy-Item -Path '.github\workflows\*' -Destination "$backup\workflows\" -Force
+
+          $ErrorActionPreference = 'Continue'
+          git remote add upstream https://github.com/Renly1994/xiaotang-daozai.git
+          git fetch upstream "refs/tags/${tag}:refs/tags/${tag}" --force
+          if ($LASTEXITCODE -ne 0) { throw "Failed to fetch upstream tag $tag" }
+          git reset --hard $tag
+          if ($LASTEXITCODE -ne 0) { throw "Failed to reset to $tag" }
+          $ErrorActionPreference = 'Stop'
+
+          Copy-Item -LiteralPath "$backup\assets\well-brand.ico" -Destination 'assets\well-brand.ico' -Force
+          Copy-Item -LiteralPath "$backup\assets\well-brand.png" -Destination 'assets\well-brand.png' -Force
+          Copy-Item -LiteralPath "$backup\scripts\rebrand_welldao.py" -Destination 'scripts\rebrand_welldao.py' -Force
+          Copy-Item -LiteralPath "$backup\scripts\package_well.ps1" -Destination 'scripts\package_well.ps1' -Force
+          Copy-Item -Path "$backup\workflows\*" -Destination '.github\workflows\' -Force
+
+          python scripts/rebrand_welldao.py
+
+      - name: 安装 Rust stable
+        if: steps.check.outputs.should_update == 'true'
+        run: rustup toolchain install stable --profile minimal
+
+      - name: 编译并打包 WELL岛 安装包与便携版
+        if: steps.check.outputs.should_update == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compiler = ./scripts/get-nsis.ps1 -Directory $env:RUNNER_TEMP
+          ./scripts/package_well.ps1 -NsisCompiler $compiler
+
+      - name: 推送代码并发布 GitHub Release
+        if: steps.check.outputs.should_update == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $tag = '${{ steps.check.outputs.target_tag }}'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "chore: auto-sync upstream $tag and rebrand to WELL岛"
+            git push origin HEAD:main --force
+            if ($LASTEXITCODE -ne 0) { throw "git push main failed" }
+          }
+          git tag -f $tag
+          git push origin "refs/tags/$tag" --force
+          if ($LASTEXITCODE -ne 0) { throw "git push tag $tag failed" }
+
+          $notesFile = "$env:RUNNER_TEMP\release_notes.md"
+          gh release view $tag >$null 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag dist/wellshijian-Setup.exe dist/wellshijian-portable.zip dist/SHA256SUMS.txt --clobber
+            if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
+          } else {
+            gh release create $tag dist/wellshijian-Setup.exe dist/wellshijian-portable.zip dist/SHA256SUMS.txt --target main --title "WELL岛 $tag" --notes-file $notesFile
+            if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+          }

@@ -477,37 +477,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
-name = "daozai"
-version = "0.6.63"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "chrono-tz",
- "clipboard-win",
- "eframe",
- "egui_extras",
- "flate2",
- "image",
- "imap",
- "imap-proto",
- "keyring",
- "mailparse",
- "memmap2",
- "native-tls",
- "raw-window-handle",
- "regex",
- "ring",
- "rrule",
- "serde",
- "serde_json",
- "ureq",
- "url",
- "wgpu",
- "windows",
- "zstd",
-]
-
-[[package]]
 name = "data-encoding"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3426,6 +3395,37 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "wellshijian"
+version = "0.6.63"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
+ "clipboard-win",
+ "eframe",
+ "egui_extras",
+ "flate2",
+ "image",
+ "imap",
+ "imap-proto",
+ "keyring",
+ "mailparse",
+ "memmap2",
+ "native-tls",
+ "raw-window-handle",
+ "regex",
+ "ring",
+ "rrule",
+ "serde",
+ "serde_json",
+ "ureq",
+ "url",
+ "wgpu",
+ "windows",
+ "zstd",
+]
 
 [[package]]
 name = "wgpu"

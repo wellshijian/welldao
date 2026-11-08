@@ -13,10 +13,10 @@ BEGIN
     BEGIN
         BLOCK "080404b0"
         BEGIN
-            VALUE "FileDescription", "岛仔"
-            VALUE "InternalName", "Daozai"
-            VALUE "OriginalFilename", "daozai.exe"
-            VALUE "ProductName", "岛仔 Daozai"
+            VALUE "FileDescription", "WELL岛"
+            VALUE "InternalName", "wellshijian"
+            VALUE "OriginalFilename", "wellshijian.exe"
+            VALUE "ProductName", "WELL岛"
             VALUE "ProductVersion", "0.6.63"
             VALUE "FileVersion", "0.6.63"
         END

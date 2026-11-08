@@ -4,7 +4,7 @@ use eframe::egui::{self,Color32};
 use std::collections::{HashMap,HashSet};
 use chrono::Datelike;
 
-const CLAUDE_LOCAL_NOTICE:&str="由于 Claude 对网络使用环境要求较高，岛仔不会使用登录凭证向 Claude 服务发送任何请求，只读取本机用量记录与缓存，自动显示其中的重置时间；缺少有效记录时，显示“重置时间未知”。";
+const CLAUDE_LOCAL_NOTICE:&str="由于 Claude 对网络使用环境要求较高，WELL岛不会使用登录凭证向 Claude 服务发送任何请求，只读取本机用量记录与缓存，自动显示其中的重置时间；缺少有效记录时，显示“重置时间未知”。";
 
 #[derive(Default)]
 pub(crate) struct State {
@@ -179,7 +179,7 @@ fn reset_text(at:Option<i64>,now:&chrono::DateTime<chrono::Local>)->String {
 fn claude_disclaimer(ui:&mut egui::Ui){
     ui.separator();
     ui.label(egui::RichText::new("免责声明").size(12.0).strong());
-    ui.add(egui::Label::new(egui::RichText::new("岛仔为非官方辅助工具，数据仅供参考，以 Claude 官方显示为准；本地读取不构成账号安全保证。").size(12.0).color(crate::settings_theme::color(ui.ctx(),Color32::from_gray(180),Color32::from_gray(75)))).wrap());
+    ui.add(egui::Label::new(egui::RichText::new("WELL岛为非官方辅助工具，数据仅供参考，以 Claude 官方显示为准；本地读取不构成账号安全保证。").size(12.0).color(crate::settings_theme::color(ui.ctx(),Color32::from_gray(180),Color32::from_gray(75)))).wrap());
 }
 impl App {
     pub(crate) fn quota_tick(&mut self){

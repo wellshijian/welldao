@@ -1,4 +1,4 @@
-//! 岛仔表情图集：按场景播放，隐藏时暂停，日常动作之间留出安静时间。
+//! WELL岛表情图集：按场景播放，隐藏时暂停，日常动作之间留出安静时间。
 use crate::pet::PetState;
 use crate::paint::Card;
 use crate::skin_paint::Palette;
