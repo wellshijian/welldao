@@ -5,7 +5,7 @@ use std::{io::{Read, Write}, path::PathBuf, sync::{mpsc::{self, Receiver}, Arc, 
 const REPOSITORY: &str = "https://github.com/wellshijian/welldao";
 const API: &str = "https://api.github.com/repos/wellshijian/welldao/releases/latest";
 const RELEASES: &str = "https://github.com/wellshijian/welldao/releases/latest";
-const BACKUP_DOWNLOAD: &str = "https://pan.quark.cn/s/0a39b4e1f332";
+const BACKUP_DOWNLOAD: &str = "https://github.akams.cn/?url=https://github.com/wellshijian/welldao/releases/latest/download/wellshijian-Setup.exe";
 
 #[derive(Clone, Debug)]
 struct Release { version: String, notes: String, page: String, package: Option<Package> }
@@ -209,7 +209,7 @@ impl State {
                         }
                         ui.add_space(2.0);
                         ui.horizontal(|ui| {
-                            ui.hyperlink_to(egui::RichText::new("网盘下载").size(11.5).color(theme::BLUE),BACKUP_DOWNLOAD);
+                            ui.hyperlink_to(egui::RichText::new("加速下载").size(11.5).color(theme::BLUE),BACKUP_DOWNLOAD);
                             ui.label(egui::RichText::new("·").color(theme::DIM));
                             ui.hyperlink_to(egui::RichText::new("浏览器下载").size(11.5).color(theme::GRAY),&release.page);
                             ui.label(egui::RichText::new("·").color(theme::DIM));
@@ -284,7 +284,7 @@ unsafe fn update_window_region(rect: egui::Rect, scale: f32) -> windows::Win32::
 fn update_agent(proxy: Option<&str>, timeout: Duration) -> Result<ureq::Agent, String> {
     // 整体 timeout 会覆盖读取超时，分别限制连接和无数据等待。
     let mut builder = ureq::AgentBuilder::new().try_proxy_from_env(false)
-        .timeout_connect(Duration::from_secs(20)).timeout_read(timeout).timeout_write(timeout);
+        .timeout_connect(Duration::from_secs(6)).timeout_read(timeout).timeout_write(timeout);
     if let Some(proxy) = proxy {
         builder = builder.proxy(ureq::Proxy::new(proxy).map_err(|_| "代理地址无效，请检查代理设置后重试")?);
     }
@@ -299,13 +299,27 @@ fn http_agent() -> Result<ureq::Agent, String> {
 }
 
 fn check() -> Result<Option<Release>, String> {
-    let response = http_agent()?
-        .get(API).set("User-Agent", concat!("Daozai/", env!("CARGO_PKG_VERSION")))
-        .set("Accept", "application/vnd.github+json").call().map_err(|error| match error {
-            ureq::Error::Status(403 | 429, _) => "检查过于频繁，请稍后重试".to_owned(),
-            ureq::Error::Status(404, _) => "暂未找到正式版本，请查看发布页".to_owned(),
-            _ => "无法连接更新服务，请检查网络或代理后重试".to_owned(),
-        })?;
+    let agent = http_agent()?;
+    let apis = [
+        API.to_owned(),
+        format!("https://gh.dpik.top/{API}"),
+        format!("https://ghgo.de5.net/{API}"),
+    ];
+    let mut last_err = "无法连接更新服务，请检查网络或代理后重试".to_owned();
+    let mut response_opt = None;
+    for url in &apis {
+        match agent.get(url)
+            .set("User-Agent", concat!("Mozilla/5.0 Daozai/", env!("CARGO_PKG_VERSION")))
+            .set("Accept", "application/vnd.github+json")
+            .call()
+        {
+            Ok(resp) => { response_opt = Some(resp); break; }
+            Err(ureq::Error::Status(403 | 429, _)) => { last_err = "检查过于频繁，请稍后重试".to_owned(); }
+            Err(ureq::Error::Status(404, _)) => { last_err = "暂未找到正式版本，请查看发布页".to_owned(); }
+            Err(_) => {}
+        }
+    }
+    let response = response_opt.ok_or(last_err)?;
     let value: serde_json::Value = serde_json::from_reader(response.into_reader())
         .map_err(|_| "更新信息格式异常，请稍后重试".to_owned())?;
     release_info(&value, env!("CARGO_PKG_VERSION"))
@@ -333,12 +347,41 @@ fn download(release: &Release, tx: &mpsc::Sender<Event>, cancel: &AtomicBool) ->
     let work = root.join(format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
     std::fs::create_dir_all(&work).map_err(|_| "无法创建更新缓存")?;
     let result = (|| {
-        let response = http_agent()?
-            .get(&package.url).call().map_err(|_| "连接下载服务器失败，请检查网络或代理，或使用网盘下载")?;
-        if !response.get_url().starts_with("https://") { return Err("更新下载未使用安全连接".into()); }
-        let mut input = response.into_reader();
-        let mut output = std::fs::File::create(work.join("update.zip")).map_err(|_| "无法保存更新包")?;
-        transfer(&mut input, &mut output, package, cancel, |progress| { let _ = tx.send(Event::Progress(progress)); })?;
+        let mirrors = [
+            "https://ghgo.de5.net/",
+            "https://gh.noki.icu/",
+            "https://cfgh.ikgy.top/",
+            "https://ghproxy.felicity.land/",
+            "https://eogh.719831.xyz/",
+            "https://ghpxy.hwinzniej.top/",
+            "https://free.cn.eu.org/",
+            "https://gh.dpik.top/",
+            "https://g.blfrp.cn/",
+            "https://gh.acmsz.top/",
+            "https://cdn.gh-proxy.com/",
+            "https://gh.idayer.com/",
+            "",
+        ];
+        let agent = http_agent()?;
+        let mut downloaded = false;
+        let mut last_error = "连接下载服务器失败，请检查网络或使用下方加速下载".to_owned();
+        for prefix in mirrors {
+            if cancel.load(Ordering::Relaxed) { return Err("下载已取消".into()); }
+            let url = format!("{prefix}{}", package.url);
+            let _ = tx.send(Event::Progress(0.0));
+            let Ok(response) = agent.get(&url)
+                .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .call() else { continue };
+            if !response.get_url().starts_with("https://") { continue; }
+            let mut input = response.into_reader();
+            let mut output = std::fs::File::create(work.join("update.zip")).map_err(|_| "无法保存更新包")?;
+            match transfer(&mut input, &mut output, package, cancel, |progress| { let _ = tx.send(Event::Progress(progress)); }) {
+                Ok(()) => { downloaded = true; break; }
+                Err(err) if err.contains("取消") => return Err(err),
+                Err(err) => { last_error = err; }
+            }
+        }
+        if !downloaded { return Err(last_error); }
         std::fs::write(work.join("apply.ps1"), concat!("\u{feff}", include_str!("../installer/update.ps1"))).map_err(|_| "无法准备更新程序")?;
         std::fs::write(work.join("version.txt"), release.version.trim_start_matches('v')).map_err(|_| "无法保存更新信息")?;
         std::fs::write(work.join("hash.txt"), &package.hash).map_err(|_| "无法保存校验信息")?;

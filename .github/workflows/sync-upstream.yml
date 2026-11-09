@@ -40,7 +40,7 @@ jobs:
 
           $expectedTag = $upTag
           if ($upTag -match '^v(\d+)\.(\d+)\.(\d+)$') {
-            $patch = [int]$Matches[3] + 1
+            $patch = [int]$Matches[3] + 2
             $expectedTag = "v$($Matches[1]).$($Matches[2]).$patch"
           }
           Write-Host "对应 WELL岛 目标版本: $expectedTag"

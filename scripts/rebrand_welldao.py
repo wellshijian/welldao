@@ -29,25 +29,28 @@ def replace_in_file(rel_path, pairs, encoding="utf-8"):
             content = item(content)
         else:
             old, new = item
+            if new and (old in new) and (new in content):
+                continue
             content = content.replace(old, new)
     if content != orig:
         with open(path, "w", encoding=encoding) as f:
             f.write(content)
         print(f"Updated {rel_path}")
 
-# 2. Cargo.toml & app.rc (including +1 patch version bump from upstream so WELL岛 custom releases never collide with upstream tags)
+# 2. Cargo.toml & app.rc (including +2 patch version bump from upstream so WELL岛 custom releases never collide with upstream tags)
 cargo_path = os.path.join(base_dir, "Cargo.toml")
 with open(cargo_path, "r", encoding="utf-8-sig") as f:
     cargo_raw = f.read()
 
-is_fresh_upstream = 'name = "daozai"' in cargo_raw
+is_fresh_upstream = 'name = "wellshijian"' not in cargo_raw
 ver_match = re.search(r'(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', cargo_raw)
-if ver_match and (is_fresh_upstream or ver_match.group(0).endswith('"0.6.63"')):
+if ver_match and (is_fresh_upstream or ver_match.group(0).endswith(('"0.6.63"', '"0.6.64"'))):
     maj, mino, pat = int(ver_match.group(1)), int(ver_match.group(2)), int(ver_match.group(3))
     old_ver = f"{maj}.{mino}.{pat}"
-    new_ver = f"{maj}.{mino}.{pat + 1}"
+    target_pat = pat + 2 if is_fresh_upstream or pat == 63 else pat + 1
+    new_ver = f"{maj}.{mino}.{target_pat}"
     old_rc_ver = f"{maj},{mino},{pat},0"
-    new_rc_ver = f"{maj},{mino},{pat + 1},0"
+    new_rc_ver = f"{maj},{mino},{target_pat},0"
 else:
     old_ver = new_ver = old_rc_ver = new_rc_ver = None
 
@@ -165,6 +168,8 @@ replace_in_file("src/mail_reader.rs", [
 # 10. src/updates.rs
 replace_in_file("src/updates.rs", [
     ('Renly1994/xiaotang-daozai', 'wellshijian/welldao'),
+    ('const BACKUP_DOWNLOAD: &str = "https://pan.quark.cn/s/0a39b4e1f332";', 'const BACKUP_DOWNLOAD: &str = "https://github.akams.cn/?url=https://github.com/wellshijian/welldao/releases/latest/download/wellshijian-Setup.exe";'),
+    ('ui.hyperlink_to(egui::RichText::new("网盘下载")', 'ui.hyperlink_to(egui::RichText::new("加速下载")'),
     ('.with_title("岛仔更新")', '.with_title("WELL岛 更新")'),
     ('.with_title("wellshijian 更新")', '.with_title("WELL岛 更新")'),
     ('"岛仔有新版本了"', '"WELL岛 有新版本了"'),
@@ -173,6 +178,82 @@ replace_in_file("src/updates.rs", [
     ('!= "wellshijian 更新"', '!= "WELL岛 更新"'),
     ('.join("Daozai/Updates")', '.join("wellshijian/Updates")'),
     ('let name = format!("Daozai-v{}-windows-x64.zip", tag.trim_start_matches(\'v\'));', 'let name = "wellshijian-portable.zip".to_string();'),
+    ('.timeout_connect(Duration::from_secs(20))', '.timeout_connect(Duration::from_secs(6))'),
+    (
+        '''fn check() -> Result<Option<Release>, String> {
+    let response = http_agent()?
+        .get(API).set("User-Agent", concat!("Daozai/", env!("CARGO_PKG_VERSION")))
+        .set("Accept", "application/vnd.github+json").call().map_err(|error| match error {
+            ureq::Error::Status(403 | 429, _) => "检查过于频繁，请稍后重试".to_owned(),
+            ureq::Error::Status(404, _) => "暂未找到正式版本，请查看发布页".to_owned(),
+            _ => "无法连接更新服务，请检查网络或代理后重试".to_owned(),
+        })?;''',
+        '''fn check() -> Result<Option<Release>, String> {
+    let agent = http_agent()?;
+    let apis = [
+        API.to_owned(),
+        format!("https://gh.dpik.top/{API}"),
+        format!("https://ghgo.de5.net/{API}"),
+    ];
+    let mut last_err = "无法连接更新服务，请检查网络或代理后重试".to_owned();
+    let mut response_opt = None;
+    for url in &apis {
+        match agent.get(url)
+            .set("User-Agent", concat!("Mozilla/5.0 Daozai/", env!("CARGO_PKG_VERSION")))
+            .set("Accept", "application/vnd.github+json")
+            .call()
+        {
+            Ok(resp) => { response_opt = Some(resp); break; }
+            Err(ureq::Error::Status(403 | 429, _)) => { last_err = "检查过于频繁，请稍后重试".to_owned(); }
+            Err(ureq::Error::Status(404, _)) => { last_err = "暂未找到正式版本，请查看发布页".to_owned(); }
+            Err(_) => {}
+        }
+    }
+    let response = response_opt.ok_or(last_err)?;''',
+    ),
+    (
+        '''        let response = http_agent()?
+            .get(&package.url).call().map_err(|_| "连接下载服务器失败，请检查网络或代理，或使用网盘下载")?;
+        if !response.get_url().starts_with("https://") { return Err("更新下载未使用安全连接".into()); }
+        let mut input = response.into_reader();
+        let mut output = std::fs::File::create(work.join("update.zip")).map_err(|_| "无法保存更新包")?;
+        transfer(&mut input, &mut output, package, cancel, |progress| { let _ = tx.send(Event::Progress(progress)); })?;''',
+        '''        let mirrors = [
+            "https://ghgo.de5.net/",
+            "https://gh.noki.icu/",
+            "https://cfgh.ikgy.top/",
+            "https://ghproxy.felicity.land/",
+            "https://eogh.719831.xyz/",
+            "https://ghpxy.hwinzniej.top/",
+            "https://free.cn.eu.org/",
+            "https://gh.dpik.top/",
+            "https://g.blfrp.cn/",
+            "https://gh.acmsz.top/",
+            "https://cdn.gh-proxy.com/",
+            "https://gh.idayer.com/",
+            "",
+        ];
+        let agent = http_agent()?;
+        let mut downloaded = false;
+        let mut last_error = "连接下载服务器失败，请检查网络或使用下方加速下载".to_owned();
+        for prefix in mirrors {
+            if cancel.load(Ordering::Relaxed) { return Err("下载已取消".into()); }
+            let url = format!("{prefix}{}", package.url);
+            let _ = tx.send(Event::Progress(0.0));
+            let Ok(response) = agent.get(&url)
+                .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .call() else { continue };
+            if !response.get_url().starts_with("https://") { continue; }
+            let mut input = response.into_reader();
+            let mut output = std::fs::File::create(work.join("update.zip")).map_err(|_| "无法保存更新包")?;
+            match transfer(&mut input, &mut output, package, cancel, |progress| { let _ = tx.send(Event::Progress(progress)); }) {
+                Ok(()) => { downloaded = true; break; }
+                Err(err) if err.contains("取消") => return Err(err),
+                Err(err) => { last_error = err; }
+            }
+        }
+        if !downloaded { return Err(last_error); }''',
+    ),
 ])
 
 # 11. installer/update.ps1, setup.nsi, install.ps1, uninstall.ps1
