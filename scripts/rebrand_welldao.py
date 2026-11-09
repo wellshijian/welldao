@@ -35,8 +35,24 @@ def replace_in_file(rel_path, pairs, encoding="utf-8"):
             f.write(content)
         print(f"Updated {rel_path}")
 
-# 2. Cargo.toml
+# 2. Cargo.toml & app.rc (including +1 patch version bump from upstream so WELL岛 custom releases never collide with upstream tags)
+cargo_path = os.path.join(base_dir, "Cargo.toml")
+with open(cargo_path, "r", encoding="utf-8-sig") as f:
+    cargo_raw = f.read()
+
+is_fresh_upstream = 'name = "daozai"' in cargo_raw
+ver_match = re.search(r'(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', cargo_raw)
+if ver_match and (is_fresh_upstream or ver_match.group(0).endswith('"0.6.63"')):
+    maj, mino, pat = int(ver_match.group(1)), int(ver_match.group(2)), int(ver_match.group(3))
+    old_ver = f"{maj}.{mino}.{pat}"
+    new_ver = f"{maj}.{mino}.{pat + 1}"
+    old_rc_ver = f"{maj},{mino},{pat},0"
+    new_rc_ver = f"{maj},{mino},{pat + 1},0"
+else:
+    old_ver = new_ver = old_rc_ver = new_rc_ver = None
+
 replace_in_file("Cargo.toml", [
+    (lambda s: s.replace(f'version = "{old_ver}"', f'version = "{new_ver}"') if old_ver else s),
     (lambda s: re.sub(r'(\[package\]\s+name\s*=\s*)"daozai"', r'\1"wellshijian"', s)),
     ('default-run = "daozai"', 'default-run = "wellshijian"'),
     (lambda s: re.sub(r'(\[\[bin\]\]\s+name\s*=\s*)"daozai"', r'\1"wellshijian"', s)),
@@ -47,6 +63,7 @@ replace_in_file("Cargo.toml", [
 
 # 3. app.rc
 replace_in_file("app.rc", [
+    (lambda s: s.replace(old_rc_ver, new_rc_ver).replace(f'"{old_ver}"', f'"{new_ver}"') if old_ver else s),
     ('VALUE "FileDescription", "岛仔"', 'VALUE "FileDescription", "WELL岛"'),
     ('VALUE "FileDescription", "wellshijian"', 'VALUE "FileDescription", "WELL岛"'),
     ('VALUE "InternalName", "Daozai"', 'VALUE "InternalName", "wellshijian"'),
@@ -206,7 +223,79 @@ replace_in_file("installer/setup.nsi", [
     ('ReadRegStr $0 HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "${APP_ID}"\n  ${If} $0 == \'"$INSTDIR\\daozai.exe"\'', 'ReadRegStr $0 HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "${APP_ID}"\n  ${If} $0 == \'"$INSTDIR\\wellshijian.exe"\''),
 ])
 
-# 12. Fallback sweep across all src/*.rs and installer/* so any newly added upstream UI text with 岛仔/岛崽 is automatically replaced with WELL岛
+# 12. Inject 「今日窝囊费」 (wonangfei.rs) feature module & hooks
+wonang_src = os.path.join(base_dir, "scripts", "wonangfei.rs")
+wonang_dst = os.path.join(base_dir, "src", "wonangfei.rs")
+if os.path.exists(wonang_src):
+    shutil.copyfile(wonang_src, wonang_dst)
+
+replace_in_file("src/lib.rs", [
+    (lambda s: s if "pub mod wonangfei;" in s else s.replace("mod pages;", "pub mod wonangfei;\nmod pages;")),
+])
+
+replace_in_file("src/model.rs", [
+    ("pub visible_pages: [bool; 8],", "pub visible_pages: [bool; 9],"),
+    ("pub page_order: [usize; 8],", "pub page_order: [usize; 9],"),
+    ("visible_pages: [true; 8], page_order: [0,1,2,3,4,5,6,7],", "visible_pages: [true; 9], page_order: [0,1,2,3,4,5,6,7,8],"),
+    (
+        'if order.len()==8 && (0..8).all(|page|order.contains(&page)) {\n                            s.page_order.copy_from_slice(&order);\n                        }',
+        'if order.len()==9 && (0..9).all(|page|order.contains(&page)) {\n                            s.page_order.copy_from_slice(&order);\n                        } else if order.len()==8 && (0..8).all(|page|order.contains(&page)) {\n                            s.page_order[..8].copy_from_slice(&order);\n                            s.page_order[8]=8;\n                        }',
+    ),
+    ('"visible_pages" if (6..=8).contains(&v.len())', '"visible_pages" if (6..=9).contains(&v.len())'),
+])
+
+replace_in_file("src/app.rs", [
+    (
+        'pub(crate) const PAGE_NAMES: [&str; 8] = ["音乐", "专注", "饮水", "置物架", "待办", "邮箱", "AI 额度", "日程"];',
+        'pub(crate) const PAGE_NAMES: [&str; 9] = ["音乐", "专注", "饮水", "置物架", "待办", "邮箱", "AI 额度", "日程", "今日窝囊费"];',
+    ),
+    ("dots: [Spring; 8],", "dots: [Spring; 9],"),
+    ("self.settings_tab=[1,2,3,5,4,7,11,8][page];", "self.settings_tab=[1,2,3,5,4,7,11,8,12][page];"),
+    ("if settings.clicked(){self.settings_tab=[1,2,3,5,4,7,11,8][self.page];self.open_settings();}", "if settings.clicked(){self.settings_tab=[1,2,3,5,4,7,11,8,12][self.page];self.open_settings();}"),
+    ('6 => ("AI", "额度", theme::SOFT_GREEN),', '6 => ("AI", "额度", theme::SOFT_GREEN),\n            8 => ("今日", "窝囊费", Color32::from_rgb(255, 204, 72)),'),
+    ("CALENDAR_PAGE => self.page_calendar(c,env),", "CALENDAR_PAGE => self.page_calendar(c,env),\n            8 => self.page_wonangfei(c, env),"),
+    (
+        "if self.settings.clock_period!=0 { layout.widen_clock(40.0); }",
+        "if self.settings.clock_period!=0 { layout.widen_clock(40.0); } else if crate::wonangfei::pill_needs_wide_clock() { layout.widen_clock(24.0); }",
+    ),
+    (
+        "let clock = self.settings.clock_text(&env.clock);",
+        "let clock = if p < 0.25 { crate::wonangfei::pill_override_text(self.t).unwrap_or_else(|| self.settings.clock_text(&env.clock)) } else { self.settings.clock_text(&env.clock) };",
+    ),
+    (
+        "|| self.notice.as_ref().is_some_and(|notice|notice.meeting.is_some());",
+        "|| self.notice.as_ref().is_some_and(|notice|notice.meeting.is_some()) || (self.open && self.page == 8);",
+    ),
+])
+
+replace_in_file("src/extras.rs", [
+    (
+        'const SETTINGS_GROUPS: [(&str,usize,usize);8] = [\n    ("常规",0,0), ("页面管理",10,10), ("音乐与歌词",1,1), ("专注与饮水",2,3),\n    ("待办与置物",4,5), ("通知、邮箱与日程",6,8), ("AI 额度",11,11), ("关于",9,9),\n];',
+        'const SETTINGS_GROUPS: [(&str,usize,usize);9] = [\n    ("常规",0,0), ("页面管理",10,10), ("音乐与歌词",1,1), ("专注与饮水",2,3),\n    ("待办与置物",4,5), ("通知、邮箱与日程",6,8), ("AI 额度",11,11), ("今日窝囊费",12,12), ("关于",9,9),\n];',
+    ),
+    (
+        "egui::Image::new(icon).paint_at(ui,icon_bg);",
+        "if start==12 { crate::wonangfei::draw_sidebar_icon(ui,icon_bg); } else { egui::Image::new(icon).paint_at(ui,icon_bg); }",
+    ),
+    (
+        'let titles=["常规","音乐与歌词","专注","饮水","待办","置物","通知","邮箱","日程","关于","页面管理","AI 额度"];\n                ui.label(egui::RichText::new(titles[self.settings_tab.min(11)])',
+        'let titles=["常规","音乐与歌词","专注","饮水","待办","置物","通知","邮箱","日程","关于","页面管理","AI 额度","今日窝囊费"];\n                ui.label(egui::RichText::new(titles[self.settings_tab.min(12)])',
+    ),
+    (
+        "11=>self.quota_settings(ui),",
+        "12=>crate::wonangfei::settings_ui(self,ui,ctx),\n                    11=>self.quota_settings(ui),",
+    ),
+    (
+        'let descriptions=["播放控制与同步歌词","番茄钟与休息计时","饮水记录与提醒","临时收纳文件位置","任务清单与到期提醒","邮件摘要与验证码","Agent 剩余额度和账号切换","月历、邮件邀请与工作日程"];',
+        'let descriptions=["播放控制与同步歌词","番茄钟与休息计时","饮水记录与提醒","临时收纳文件位置","任务清单与到期提醒","邮件摘要与验证码","Agent 剩余额度和账号切换","月历、邮件邀请与工作日程","实时计算今日入账窝囊费与发薪日倒计时"];',
+    ),
+    (
+        'setting_row(ui,"岛上歌词","收起时显示歌词，无歌词时显示封面和歌名",&mut self.settings.island_lyrics);',
+        'setting_row(ui,"岛上歌词","收起时显示歌词，无歌词时显示封面和歌名",&mut self.settings.island_lyrics);\n                            ui.separator();\n                            let mut pill_on = crate::wonangfei::get_config().pill_mode != 0;\n                            setting_row(ui,"岛上窝囊费","收起时在顶部岛上轮播或常驻显示今日已挣窝囊费",&mut pill_on);\n                            if pill_on != (crate::wonangfei::get_config().pill_mode != 0) {\n                                crate::wonangfei::update_config(|c| c.pill_mode = if pill_on { 1 } else { 0 });\n                            }',
+    ),
+])
+
+# 13. Fallback sweep across all src/*.rs and installer/* so any newly added upstream UI text with 岛仔/岛崽 is automatically replaced with WELL岛
 for root_sub in ["src", "installer"]:
     folder = os.path.join(base_dir, root_sub)
     if not os.path.isdir(folder):

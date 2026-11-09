@@ -38,6 +38,13 @@ jobs:
           $upNotes = $up.body
           Write-Host "原版最新版本: $upTag"
 
+          $expectedTag = $upTag
+          if ($upTag -match '^v(\d+)\.(\d+)\.(\d+)$') {
+            $patch = [int]$Matches[3] + 1
+            $expectedTag = "v$($Matches[1]).$($Matches[2]).$patch"
+          }
+          Write-Host "对应 WELL岛 目标版本: $expectedTag"
+
           $myTag = ''
           try {
             $my = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest" -Headers @{ 'User-Agent' = 'wellshijian-sync' }
@@ -48,7 +55,7 @@ jobs:
           Write-Host "当前 WELL岛 最新版本: $myTag"
 
           $force = '${{ inputs.force_rebuild }}' -eq 'true'
-          if ($force -or ($upTag -and $upTag -ne $myTag)) {
+          if ($force -or ($upTag -and $expectedTag -ne $myTag)) {
             "should_update=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             "target_tag=$upTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             $cleanNotes = ([string]$upNotes).Replace('岛仔 Daozai', 'WELL岛').Replace('岛仔', 'WELL岛').Replace('Daozai', 'WELL岛')
@@ -71,6 +78,9 @@ jobs:
           Copy-Item -LiteralPath 'assets\well-brand.png' -Destination "$backup\assets\well-brand.png" -Force
           Copy-Item -LiteralPath 'scripts\rebrand_welldao.py' -Destination "$backup\scripts\rebrand_welldao.py" -Force
           Copy-Item -LiteralPath 'scripts\package_well.ps1' -Destination "$backup\scripts\package_well.ps1" -Force
+          if (Test-Path -LiteralPath 'scripts\wonangfei.rs') {
+            Copy-Item -LiteralPath 'scripts\wonangfei.rs' -Destination "$backup\scripts\wonangfei.rs" -Force
+          }
           Copy-Item -LiteralPath '.github\workflows\sync-upstream.yml' -Destination "$backup\workflows\sync-upstream.yml" -Force
 
           $ErrorActionPreference = 'Continue'
@@ -87,6 +97,9 @@ jobs:
           Copy-Item -LiteralPath "$backup\assets\well-brand.png" -Destination 'assets\well-brand.png' -Force
           Copy-Item -LiteralPath "$backup\scripts\rebrand_welldao.py" -Destination 'scripts\rebrand_welldao.py' -Force
           Copy-Item -LiteralPath "$backup\scripts\package_well.ps1" -Destination 'scripts\package_well.ps1' -Force
+          if (Test-Path -LiteralPath "$backup\scripts\wonangfei.rs") {
+            Copy-Item -LiteralPath "$backup\scripts\wonangfei.rs" -Destination 'scripts\wonangfei.rs' -Force
+          }
           Copy-Item -LiteralPath "$backup\workflows\sync-upstream.yml" -Destination '.github\workflows\sync-upstream.yml' -Force
 
           python scripts/rebrand_welldao.py
@@ -108,13 +121,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          $tag = '${{ steps.check.outputs.target_tag }}'
+          $upTag = '${{ steps.check.outputs.target_tag }}'
+          $ver = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
+          $tag = "v$ver"
+          Write-Host "发布版本 Tag: $tag (基于原版 $upTag)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --quiet
           if ($LASTEXITCODE -ne 0) {
-            git commit -m "chore: auto-sync upstream $tag and rebrand to WELL岛"
+            git commit -m "chore: auto-sync upstream $upTag and rebrand to WELL岛 $tag"
             git push origin HEAD:main --force
             if ($LASTEXITCODE -ne 0) { throw "git push main failed" }
           }
