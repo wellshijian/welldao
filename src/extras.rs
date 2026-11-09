@@ -1729,8 +1729,8 @@ impl App {
                                 ui.hyperlink_to("CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/");
                             });
                         });
-                        settings_label(ui,"支持作者");
-                        settings_card(ui,support_author);
+                        
+                        if false { support_author(ui); }
                     }
                     }
                 });

@@ -102,6 +102,8 @@ replace_in_file("src/extras.rs", [
     ('setting_row(ui,"岛仔提醒"', 'setting_row(ui,"WELL岛提醒"'),
     ('settings_label(ui,"岛仔 Daozai");', 'settings_label(ui,"WELL岛");'),
     ('settings_label(ui,"wellshijian");', 'settings_label(ui,"WELL岛");'),
+    ('settings_label(ui,"支持作者");', ''),
+    ('settings_card(ui,support_author);', 'if false { support_author(ui); }'),
 ])
 
 # 8. src/app.rs
