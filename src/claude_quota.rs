@@ -68,7 +68,7 @@ fn desktop_record(path:&Path,account:Option<&Account>,verified_cache:&Path)->Res
             snapshot.windows.push(Window{label:label.into(),seconds:Some(seconds),remaining:(100.0-used) as f32,reset:None,amount:None});
         }
     }
-    // 历史和浏览器缓存均按组织保存。账号配置较新时，只能回显岛仔已为该账号核验过的快照。
+    // 历史和浏览器缓存均按组织保存。账号配置较新时，只能回显WELL岛已为该账号核验过的快照。
     if let Some(cached)=desktop_cache::read(&path.with_file_name("Cache").join("Cache_Data"),org,snapshot.at,now/1000)
         .filter(|s|s.at*1000>login_stamp){
         snapshot=cached;
@@ -173,7 +173,7 @@ mod tests {
         // 退出只保存窗口状态，账号标识没有变化。
         fs::write(&path,json!({"lastKnownAccountUuid":"owner","windowBounds":{"width":1200}}).to_string()).unwrap();
         let (_,after)=desktop_record(&path,Some(&saved),&cache).expect("已绑定账号退出后仍应显示自己的历史记录");assert_eq!((after.at,&after.windows),(before.at,&before.windows));assert_eq!(fs::read_to_string(dir.join(HISTORY)).unwrap(),history);
-        let (_,restored)=desktop_record(&path,Some(&saved.clone()),&cache).unwrap();assert_eq!((restored.at,&restored.windows),(before.at,&before.windows),"岛仔重新启动后也应保留历史额度");
+        let (_,restored)=desktop_record(&path,Some(&saved.clone()),&cache).unwrap();assert_eq!((restored.at,&restored.windows),(before.at,&before.windows),"WELL岛重新启动后也应保留历史额度");
         fs::write(&path,json!({"lastKnownAccountUuid":"different-owner"}).to_string()).unwrap();assert!(fetch(&saved).is_err(),"真正切换账号后不能继续读取当前来源的历史");let _=fs::remove_dir_all(dir);
     }
     #[test]

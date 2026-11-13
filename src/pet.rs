@@ -1,4 +1,4 @@
-//! 岛仔的原生状态、矢量表情与表情图集播放。
+//! WELL岛的原生状态、矢量表情与表情图集播放。
 use crate::anim::{approach, lerp, smoothstep};
 use crate::paint::{Card, H};
 use crate::theme::{self, W};

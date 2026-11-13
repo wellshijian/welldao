@@ -8,7 +8,7 @@ fn write_report(directory: &Path, title: &str, details: &str) -> std::io::Result
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     std::fs::write(&path, format!(
-        "岛仔 {}\n系统：{} / {}\n时间（Unix 秒）：{timestamp}\n{title}\n{details}\n",
+        "WELL岛 {}\n系统：{} / {}\n时间（Unix 秒）：{timestamp}\n{title}\n{details}\n",
         env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH,
     ))?;
     Ok(path)
@@ -28,7 +28,7 @@ pub fn report(title: &str, details: &str) {
         use windows::core::{w, PCWSTR};
         use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
         let wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-        unsafe { MessageBoxW(None, PCWSTR(wide.as_ptr()), w!("岛仔"), MB_OK | MB_ICONERROR); }
+        unsafe { MessageBoxW(None, PCWSTR(wide.as_ptr()), w!("WELL岛"), MB_OK | MB_ICONERROR); }
     }
     #[cfg(not(windows))]
     eprintln!("{text}");
@@ -39,7 +39,7 @@ pub fn startup(stage:&str) {
     let directory=daozai::model::config_dir().join("diagnostics");
     if std::fs::create_dir_all(&directory).is_ok() {
         let _=std::fs::write(directory.join("last-startup.log"),format!(
-            "岛仔 {}\n进程：{}\n启动阶段：{stage}\n",env!("CARGO_PKG_VERSION"),std::process::id()));
+            "WELL岛 {}\n进程：{}\n启动阶段：{stage}\n",env!("CARGO_PKG_VERSION"),std::process::id()));
     }
 }
 
@@ -67,7 +67,7 @@ fn restart_allowed(history: &str, now: u64, uptime: std::time::Duration) -> bool
     recent < 3
 }
 
-/// 启动一个新的岛仔：它会先等当前进程退出，再走正常的单实例启动流程。
+/// 启动一个新的WELL岛：它会先等当前进程退出，再走正常的单实例启动流程。
 pub fn spawn_replacement() -> bool {
     let Ok(exe) = std::env::current_exe() else { return false };
     let mut command = std::process::Command::new(exe);
@@ -94,7 +94,7 @@ fn relaunch_after_failure(reason: &str) -> bool {
     spawn_replacement()
 }
 
-/// 自动重启的新进程：等上一个岛仔退出（最多 15 秒）再继续，避免单实例检查把自己挡住。
+/// 自动重启的新进程：等上一个WELL岛退出（最多 15 秒）再继续，避免单实例检查把自己挡住。
 pub fn wait_for_previous_instance() {
     let mut args = std::env::args();
     while let Some(arg) = args.next() {
@@ -150,15 +150,15 @@ mod native_crash {
             details.push_str("判断：崩在显卡的 OpenGL 驱动里，下次启动自动改用兼容渲染（Direct3D 12）。\n");
         }
         let restarted = super::relaunch_after_failure(&format!("进程崩溃（{module}）"));
-        details.push_str(if restarted { "已自动重新启动岛仔。\n" } else { "未自动重启（运行不足 30 秒或一小时内已重启 3 次）。\n" });
-        let _ = super::write_report(&super::diagnostics_dir(), "岛仔意外退出（进程崩溃）", &details);
+        details.push_str(if restarted { "已自动重新启动WELL岛。\n" } else { "未自动重启（运行不足 30 秒或一小时内已重启 3 次）。\n" });
+        let _ = super::write_report(&super::diagnostics_dir(), "WELL岛意外退出（进程崩溃）", &details);
         // 交给系统继续处理，Windows 事件日志里仍会留下崩溃记录。
         EXCEPTION_CONTINUE_SEARCH
     }
 
     pub fn install() { unsafe { SetUnhandledExceptionFilter(Some(filter)); } }
 
-    /// 验收用：`DAOZAI_TEST_CRASH=native` 时，运行指定秒数后在岛仔自身触发一次访问违规。
+    /// 验收用：`DAOZAI_TEST_CRASH=native` 时，运行指定秒数后在WELL岛自身触发一次访问违规。
     pub fn test_crash_hook() {
         let Ok(value) = std::env::var("DAOZAI_TEST_CRASH") else { return };
         let Some(seconds) = value.strip_prefix("native:").and_then(|s| s.parse::<u64>().ok()) else { return };
@@ -178,12 +178,12 @@ pub fn install() {
         let location = info.location().map(|p| format!("{}:{}:{}", p.file(), p.line(), p.column()))
             .unwrap_or_else(|| "未知".into());
         let details = format!("代码位置：{location}\n调用栈：\n{}", std::backtrace::Backtrace::force_capture());
-        // 主线程出错会让整个岛仔退出：记下原因后直接自动重启，不弹窗打断。后台线程出错不影响主界面，仍按原样提示。
+        // 主线程出错会让整个WELL岛退出：记下原因后直接自动重启，不弹窗打断。后台线程出错不影响主界面，仍按原样提示。
         if std::thread::current().name() == Some("main") && relaunch_after_failure("程序异常") {
-            let _ = write_report(&diagnostics_dir(), "岛仔发生异常，已自动重新启动。", &details);
+            let _ = write_report(&diagnostics_dir(), "WELL岛发生异常，已自动重新启动。", &details);
             return;
         }
-        report("岛仔发生异常，请重新启动。", &details);
+        report("WELL岛 发生异常，请重新启动。", &details);
     }));
 }
 
