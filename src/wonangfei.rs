@@ -275,7 +275,7 @@ impl App {
         let cfg = get_config();
         let res = calculate(&cfg);
 
-        // 顶部状态胶囊（标题右侧）
+        // 状态胶囊（与「今日已挣窝囊费」同一行，右对齐，避开顶栏时钟）
         let (badge_text, badge_bg, badge_fg) = match res.state {
             WorkState::Working => (
                 format!("搬砖受气中 · 秒入 ¥{:.3}", res.per_second),
@@ -299,8 +299,9 @@ impl App {
             ),
         };
         let bw = c.text_w(&badge_text, 9.5, W::Semibold) + 14.0;
-        c.fill(112.0, 11.0, bw, 17.5, 8.5, badge_bg);
-        c.centered_text(112.0 + bw / 2.0, 19.8, &badge_text, 9.5, W::Semibold, badge_fg, H::Center);
+        let bx = 18.0 + 226.0 - bw;
+        c.fill(bx, 37.5, bw, 17.5, 8.5, badge_bg);
+        c.centered_text(bx + bw / 2.0, 46.3, &badge_text, 9.5, W::Semibold, badge_fg, H::Center);
 
         // 左侧主金额展示区
         c.text(18.0, 46.0, "今日已挣窝囊费", 10.5, W::Regular, theme::GRAY, H::Left);
