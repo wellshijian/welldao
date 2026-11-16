@@ -421,9 +421,9 @@ pub fn settings_ui(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
             app.set_page_visible(wonang_page, page_on);
         }
         ui.separator();
-        settings_control_row(ui, "收起时显示", 84.0, |ui| {
+        settings_control_row(ui, "收起时显示", 96.0, |ui| {
             ui.horizontal(|ui| {
-                for (mode, label) in [(0u8, "仅展开时显示"), (1u8, "与时间轮播(5秒)"), (2u8, "收起时常驻")] {
+                for (mode, label) in [(0u8, "仅展开"), (1u8, "与时间轮播"), (2u8, "常驻")] {
                     if ui.selectable_label(cfg.pill_mode == mode, label).clicked() {
                         cfg.pill_mode = mode;
                     }
@@ -445,8 +445,9 @@ pub fn settings_ui(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
                         .suffix(" / 月")
                         .fixed_decimals(0),
                 );
+                ui.add_space(4.0);
                 for preset in [6000.0, 10000.0, 15000.0, 20000.0] {
-                    if ui.small_button(format!("¥{}", preset as u32)).clicked() {
+                    if ui.selectable_label(cfg.monthly_salary == preset, format!("{}", preset as u32)).clicked() {
                         cfg.monthly_salary = preset;
                     }
                 }
@@ -457,10 +458,10 @@ pub fn settings_ui(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
         settings_control_row(ui, "休假制度", 96.0, |ui| {
             ui.horizontal(|ui| {
                 for (mode, label) in [
-                    (0u8, "双休 (21.75天)"),
-                    (1u8, "大小周 (24天)"),
-                    (2u8, "单休 (26天)"),
-                    (3u8, "全勤 (30天)"),
+                    (0u8, "双休"),
+                    (1u8, "大小周"),
+                    (2u8, "单休"),
+                    (3u8, "全勤"),
                 ] {
                     if ui.selectable_label(cfg.rest_mode == mode, label).clicked() {
                         cfg.rest_mode = mode;
@@ -491,8 +492,9 @@ pub fn settings_ui(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
         settings_control_row(ui, "每月发薪日", 96.0, |ui| {
             ui.horizontal(|ui| {
                 ui.add(egui::DragValue::new(&mut cfg.payday).range(1..=31).prefix("每月 ").suffix(" 号"));
+                ui.add_space(4.0);
                 for d in [5u32, 10, 15, 25, 30] {
-                    if ui.small_button(format!("{d}号")).clicked() {
+                    if ui.selectable_label(cfg.payday == d, format!("{d}号")).clicked() {
                         cfg.payday = d;
                     }
                 }
