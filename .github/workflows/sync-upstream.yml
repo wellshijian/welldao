@@ -59,7 +59,9 @@ jobs:
           Write-Host "当前已发布版本: $myTag"
 
           $force = '${{ inputs.force_rebuild }}' -eq 'true'
-          if ($force -or ($upTag -and $expectedTag -ne $myTag)) {
+          $myNewer = $false
+          try { $myNewer = ($myTag -match '^v\d+\.\d+\.\d+$') -and ([version]$myTag.TrimStart('v') -ge [version]$expectedTag.TrimStart('v')) } catch { $myNewer = $false }
+          if ($force -or ($upTag -and -not $myNewer)) {
             "should_update=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             "target_tag=$upTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             $w1 = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('5bKb5LuU'))
