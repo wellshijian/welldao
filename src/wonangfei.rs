@@ -387,22 +387,22 @@ pub fn settings_ui(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     let res = calculate(&cfg);
     settings_label(ui, "实时窝囊费预览");
     settings_card(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.label(RichText::new(format!("今日已挣：¥ {:.2}", res.earned_today)).size(16.0).strong().color(GOLD));
-                ui.label(
-                    RichText::new(format!(
-                        "折合日薪：¥ {:.2} / 天（{}，月均 {} 天） · 距离 {} 号发薪还有 {} 天",
-                        res.daily_salary,
-                        cfg.rest_label(),
-                        cfg.work_days_per_month(),
-                        cfg.payday,
-                        res.days_to_payday
-                    ))
-                    .size(12.0),
-                );
-            });
-        });
+        ui.label(RichText::new(format!("今日已挣：¥ {:.2}", res.earned_today)).size(16.0).strong().color(GOLD));
+        ui.add_space(2.0);
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "折合日薪：¥ {:.2} / 天（{}，月均 {} 天） · 距离 {} 号发薪还有 {} 天",
+                    res.daily_salary,
+                    cfg.rest_label(),
+                    cfg.work_days_per_month(),
+                    cfg.payday,
+                    res.days_to_payday
+                ))
+                .size(12.0),
+            )
+            .wrap(),
+        );
     });
 
     settings_label(ui, "显示位置与开关");
@@ -423,7 +423,7 @@ pub fn settings_ui(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
         }
         ui.separator();
         settings_control_row(ui, "收起时显示", 96.0, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for (mode, label) in [(0u8, "仅展开"), (1u8, "与时间轮播"), (2u8, "常驻")] {
                     if ui.selectable_label(cfg.pill_mode == mode, label).clicked() {
                         cfg.pill_mode = mode;
@@ -437,7 +437,7 @@ pub fn settings_ui(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
     settings_label(ui, "打工人参数设置");
     settings_card(ui, |ui| {
         settings_control_row(ui, "税前/到手月薪", 96.0, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.add(
                     egui::DragValue::new(&mut cfg.monthly_salary)
                         .range(500.0..=1_000_000.0)
@@ -447,8 +447,8 @@ pub fn settings_ui(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
                         .fixed_decimals(0),
                 );
                 ui.add_space(4.0);
-                for preset in [6000.0, 10000.0, 15000.0, 20000.0] {
-                    if ui.selectable_label(cfg.monthly_salary == preset, format!("{}", preset as u32)).clicked() {
+                for (preset, label) in [(6000.0, "6k"), (10000.0, "10k"), (15000.0, "15k"), (20000.0, "20k")] {
+                    if ui.selectable_label(cfg.monthly_salary == preset, label).clicked() {
                         cfg.monthly_salary = preset;
                     }
                 }
@@ -457,7 +457,7 @@ pub fn settings_ui(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
         ui.separator();
         settings_control_row(ui, "休假制度", 96.0, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for (mode, label) in [
                     (0u8, "双休"),
                     (1u8, "大小周"),
@@ -491,7 +491,7 @@ pub fn settings_ui(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
         ui.separator();
         settings_control_row(ui, "每月发薪日", 96.0, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.add(egui::DragValue::new(&mut cfg.payday).range(1..=31).prefix("每月 ").suffix(" 号"));
                 ui.add_space(4.0);
                 for d in [5u32, 10, 15, 25, 30] {
