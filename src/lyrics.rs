@@ -515,10 +515,21 @@ fn search_terms(track:&str,artist:&str)->(String,String) {
     (split_feature(&clean_title(track)).0.to_owned(),split_feature(artist).0.to_owned())
 }
 
+/// 候选的歌名和歌手是否对得上。`lead_only` 为假时要求歌手集合完全相同；
+/// 为真时是严格匹配落空后的第二轮：播放器（如网易云的系统媒体会话）常只上报主艺人，
+/// 播放侧只有一位歌手、歌名不含 feat 时，允许候选为包含这位主艺人的合唱署名（#202）。
+fn credit_match(played:&(String,Vec<String>),track:&str,candidate:&(String,Vec<String>),lead_only:bool)->bool {
+    if played.1.is_empty() || played.0!=candidate.0 {return false;}
+    if !lead_only {return played.1==candidate.1;}
+    played.1.len()==1 && split_feature(&clean_title(track)).1.is_empty() && candidate.1.contains(&played.1[0])
+}
+
 fn netease_candidates(items:&[serde_json::Value],track:&str,artist:&str,duration:f64)->Vec<u64> {
     let title=normalized(track);
     let identity=song_identity(track,artist);
     let mut matches=Vec::new();
+    for lead_only in [false,true] {
+    if !matches.is_empty() {break;}
     for item in items {
         let Some(id)=item.get("id").and_then(|v|v.as_u64()) else{continue;};
         let name=item.get("name").and_then(|v|v.as_str()).unwrap_or_default();
@@ -526,11 +537,12 @@ fn netease_candidates(items:&[serde_json::Value],track:&str,artist:&str,duration
         let artists=item.get("artists").or_else(||item.get("ar")).and_then(|v|v.as_array());
         let Some(artists)=artists else{continue;};
         let names=artists.iter().filter_map(|a|a.get("name")?.as_str()).collect::<Vec<_>>().join("、");
-        if identity.1.is_empty() || song_identity(name,&names)!=identity{continue;}
+        if !credit_match(&identity,track,&song_identity(name,&names),lead_only){continue;}
         let candidate_duration=item.get("duration").or_else(||item.get("dt")).and_then(|v|v.as_f64()).unwrap_or_default()/1000.0;
         let difference=if duration>0.0 {(candidate_duration-duration).abs()}else{0.0};
         if duration>0.0 && difference>(duration*0.03).max(10.0){continue;}
         matches.push((id,!exact,difference));
+    }
     }
     matches.sort_by(|a,b|a.1.cmp(&b.1).then(a.2.total_cmp(&b.2)));
     matches.into_iter().map(|(id,_,_)|id).take(3).collect()
@@ -665,12 +677,18 @@ fn fetch_from(base:&str,track:&str,artist:&str,duration_secs:f64)->Result<Lyrics
     let identity=song_identity(track,artist);
     let (query_title,query_artist)=search_terms(track,artist);
     let items=search(base,&query_title,&query_artist)?;
-    let items=items.into_iter().filter(|item|{
+    lyrics_from_items(&lrclib_matches(items,track,&identity),track,duration_secs)
+}
+
+/// LRCLIB 候选：先要求歌手完全相同，没有时再允许「播放器只报主艺人」的合唱署名。
+fn lrclib_matches(items:Vec<serde_json::Value>,track:&str,identity:&(String,Vec<String>))->Vec<serde_json::Value> {
+    let pick=|lead_only|items.iter().filter(|item|{
         let name=item.get("trackName").and_then(|v|v.as_str()).unwrap_or_default();
         let singer=item.get("artistName").and_then(|v|v.as_str()).unwrap_or_default();
-        !identity.1.is_empty() && song_identity(name,singer)==identity
-    }).collect::<Vec<_>>();
-    lyrics_from_items(&items,track,duration_secs)
+        credit_match(identity,track,&song_identity(name,singer),lead_only)
+    }).cloned().collect::<Vec<_>>();
+    let strict=pick(false);
+    if strict.is_empty(){pick(true)}else{strict}
 }
 
 fn search(base:&str,track:&str,artist:&str)->Result<Vec<serde_json::Value>,FetchError> {
@@ -1178,6 +1196,40 @@ mod tests {
         assert!(same_song("Track","","Track","甲"));
         assert!(!same_song("Track (Live)","甲","Track","甲"));
         assert!(!same_song("Track","甲","Track","丙"));
+    }
+
+    #[test]
+    fn player_reporting_lead_artist_only_still_matches_collaboration(){
+        // #202：网易云系统会话只报「雄之助」，候选署名是「雄之助、WaMi」。
+        let items=serde_json::json!([
+            {"id":1822506511,"name":"Loop","artists":[{"name":"雄之助"},{"name":"WaMi"}],"duration":185000},
+            {"id":1,"name":"Loop","artists":[{"name":"RHYM"}],"duration":185000},
+            {"id":2,"name":"Loop (Live)","artists":[{"name":"雄之助"}],"duration":185000}
+        ]);
+        assert_eq!(netease_candidates(items.as_array().unwrap(),"Loop","雄之助",185.0),vec![1822506511]);
+        assert!(netease_candidates(items.as_array().unwrap(),"Loop","雄之助",240.0).is_empty(),"时长约束不变");
+        assert!(netease_candidates(items.as_array().unwrap(),"Loop","WaMi、别人",185.0).is_empty(),"播放侧多位歌手时不放宽");
+        // 有完全相同署名的候选时只用它，不混入合唱版。
+        let both=serde_json::json!([
+            {"id":3,"name":"Loop","artists":[{"name":"雄之助"},{"name":"WaMi"}],"duration":185000},
+            {"id":4,"name":"Loop","artists":[{"name":"雄之助"}],"duration":185000}
+        ]);
+        assert_eq!(netease_candidates(both.as_array().unwrap(),"Loop","雄之助",185.0),vec![4]);
+        // 歌名带 feat 的严格用例保持拒绝。
+        let strict=serde_json::json!([{"id":5,"name":"Track","artists":[{"name":"Artist"},{"name":"Guest"},{"name":"Other"}],"duration":120000}]);
+        assert!(netease_candidates(strict.as_array().unwrap(),"Track (feat. Guest)","Artist",120.0).is_empty());
+        // LRCLIB 同样处理。
+        let lrclib=vec![serde_json::json!({"trackName":"Loop","artistName":"雄之助, WaMi"}),serde_json::json!({"trackName":"Loop","artistName":"RHYM"})];
+        let found=lrclib_matches(lrclib,"Loop",&song_identity("Loop","雄之助"));
+        assert_eq!(found.len(),1);assert_eq!(found[0]["artistName"],"雄之助, WaMi");
+    }
+
+    #[test]
+    #[ignore="联网：按 #202 的播放信息（只有主艺人）真实查询网易云、QQ 音乐、LRCLIB"]
+    fn live_lead_artist_only_finds_collaboration_lyrics(){
+        let lyrics=fetch("Loop","雄之助",0.0).expect("应能找到 Loop - 雄之助、WaMi 的歌词");
+        println!("找到 {} 行，同步={}",lyrics.lines.len(),lyrics.synced);
+        assert!(lyrics.synced && !lyrics.lines.is_empty());
     }
 
     #[test]

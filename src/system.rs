@@ -221,7 +221,7 @@ struct Foreground {
 
 /// 前台从全屏窗口切到别的窗口时，是否仍按原来的全屏处理（WELL岛保持隐藏）。
 ///
-/// 3ds Max、Photoshop 这类软件全屏（或最大化后盖满整块屏幕）时，插件面板、浮动工具条、
+/// 3ds Max、Photoshop 这类软件全屏时，插件面板、浮动工具条、
 /// 属性对话框都是同一个程序的附属窗口；每点一下前台就在它们和主窗口之间来回切，
 /// 过去WELL岛会跟着「出现 → 消失」闪一次。只要原来的全屏窗口还盖着屏幕，
 /// 而新的前台是它的附属窗口（被它拥有，或同一程序里不单独占任务栏的窗口），就继续隐藏。
@@ -267,7 +267,45 @@ unsafe fn covering_monitor(hwnd: HWND) -> Option<crate::display_layout::Bounds> 
         && r.top <= info.rcMonitor.top
         && r.right >= info.rcMonitor.right
         && r.bottom >= info.rcMonitor.bottom;
+    // 任务栏自动隐藏时，普通最大化窗口的外框也可能覆盖整屏，但标题栏占掉了客户区顶部。
+    // 以客户区是否盖满整屏为准，不看样式位：有的游戏全屏时保留标题栏样式和最大化标志、
+    // 实际并不画标题栏，按样式位判断会把它们当成普通最大化（0.6.65 的无畏契约回归）。
+    if covers && IsZoomed(hwnd).as_bool() && !client_covers(hwnd, &info.rcMonitor) {
+        #[cfg(not(test))] log_maximized_exclusion(hwnd, r, info.rcMonitor);
+        return None;
+    }
     covers.then_some(crate::display_layout::Bounds {left:info.rcMonitor.left,top:info.rcMonitor.top,right:info.rcMonitor.right,bottom:info.rcMonitor.bottom})
+}
+
+/// 客户区（不含标题栏和边框）是否盖满整块屏幕。
+unsafe fn client_covers(hwnd: HWND, monitor: &RECT) -> bool {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::ClientToScreen;
+    let mut c = RECT::default();
+    if GetClientRect(hwnd, &mut c).is_err() { return false; }
+    let (mut tl, mut br) = (POINT { x: c.left, y: c.top }, POINT { x: c.right, y: c.bottom });
+    if !ClientToScreen(hwnd, &mut tl).as_bool() || !ClientToScreen(hwnd, &mut br).as_bool() { return false; }
+    tl.x <= monitor.left && tl.y <= monitor.top && br.x >= monitor.right && br.y >= monitor.bottom
+}
+
+/// 诊断：盖满屏幕却按普通最大化处理（不隐藏WELL岛）的窗口，每个窗口只记一次，便于核对用户反馈。
+#[cfg(not(test))]
+unsafe fn log_maximized_exclusion(hwnd: HWND, window: RECT, monitor: RECT) {
+    use std::sync::Mutex;
+    static LOGGED: Mutex<isize> = Mutex::new(0);
+    let mut logged = LOGGED.lock().unwrap_or_else(|e| e.into_inner());
+    if *logged == hwnd.0 as isize { return; }
+    *logged = hwnd.0 as isize;
+    let mut cls = [0u16; 128];
+    let n = GetClassNameW(hwnd, &mut cls);
+    let mut c = RECT::default();
+    let _ = GetClientRect(hwnd, &mut c);
+    let line = format!("{} 普通最大化不隐藏：类名={} 样式=0x{:08x} 扩展=0x{:08x} 窗口={:?} 客户区={}×{} 屏幕={:?}",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), String::from_utf16_lossy(&cls[..n.max(0) as usize]),
+        GetWindowLongPtrW(hwnd, GWL_STYLE) as u32, GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32,
+        (window.left, window.top, window.right, window.bottom), c.right - c.left, c.bottom - c.top,
+        (monitor.left, monitor.top, monitor.right, monitor.bottom));
+    crate::resources::append_log(&crate::model::config_dir().join("diagnostics"), "fullscreen.log", &line);
 }
 
 pub fn fullscreen() -> Option<crate::display_layout::Bounds> {
@@ -315,6 +353,58 @@ mod fullscreen_follow_tests {
     const MAX: Foreground = Foreground { hwnd: 100, pid: 7, root_owner: 100, app_window: true };
 
     #[test]
+    fn maximized_browser_and_borderless_fullscreen_at_the_same_bounds_are_distinct() {
+        unsafe {
+            let hwnd = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, windows::core::w!("STATIC"),
+                windows::core::w!(""), WS_OVERLAPPEDWINDOW | WS_MAXIMIZE, 0, 0, 320, 240, None, None, None, None).unwrap();
+            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            assert!(GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut info).as_bool());
+            let r = info.rcMonitor;
+            let cover = || SetWindowPos(hwnd, HWND_BOTTOM, r.left, r.top, r.right-r.left, r.bottom-r.top,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED).unwrap();
+            cover();
+            assert!(IsZoomed(hwnd).as_bool());
+            let maximized = covering_monitor(hwnd);
+            // Chromium 进入 F11 时移除标题栏和可调整大小的边框，仍可能保留最大化标志。
+            let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+            SetWindowLongPtrW(hwnd, GWL_STYLE, style & !((WS_CAPTION | WS_THICKFRAME).0 as isize));
+            cover();
+            let fullscreen = covering_monitor(hwnd);
+            DestroyWindow(hwnd).unwrap();
+            assert!(fullscreen.is_some(), "无边框全屏仍应隐藏WELL岛");
+            assert!(maximized.is_none(), "普通最大化即使盖满屏幕也应显示WELL岛");
+        }
+    }
+
+    #[test]
+    fn game_that_keeps_caption_style_but_draws_no_caption_still_hides_the_island() {
+        use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+        unsafe extern "system" fn proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+            // 不留非客户区：样式里有标题栏，但客户区就是整个窗口（自绘或无边框全屏的游戏）。
+            if m == WM_NCCALCSIZE && w.0 != 0 { return LRESULT(0); }
+            DefWindowProcW(h, m, w, l)
+        }
+        unsafe {
+            let class = windows::core::w!("DaozaiCaptionlessGame");
+            let wc = WNDCLASSW { lpfnWndProc: Some(proc), lpszClassName: class, ..Default::default() };
+            RegisterClassW(&wc);
+            let hwnd = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, class, windows::core::w!(""),
+                WS_OVERLAPPEDWINDOW | WS_MAXIMIZE, 0, 0, 320, 240, None, None, None, None).unwrap();
+            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            assert!(GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut info).as_bool());
+            let r = info.rcMonitor;
+            SetWindowPos(hwnd, HWND_BOTTOM, r.left, r.top, r.right-r.left, r.bottom-r.top,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED).unwrap();
+            let zoomed = IsZoomed(hwnd).as_bool();
+            let captioned = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & WS_CAPTION.0 == WS_CAPTION.0;
+            let result = covering_monitor(hwnd);
+            DestroyWindow(hwnd).unwrap();
+            assert!(zoomed && captioned, "复现条件：最大化且保留标题栏样式");
+            assert!(result.is_some(), "客户区盖满整屏的全屏游戏应隐藏WELL岛");
+        }
+    }
+
+    #[test]
     fn plugin_panels_and_dialogs_of_the_fullscreen_app_keep_the_island_hidden() {
         // 被主窗口拥有的插件面板 / 对话框
         let owned = Foreground { hwnd: 200, pid: 7, root_owner: 100, app_window: false };
@@ -357,7 +447,9 @@ fn browser_overlaps_island(browser:RECT,island:RECT,dock:crate::model::Dock)->bo
     let center=island.left as f32+crate::app::WIN_W*scale/2.0;
     let half=crate::app::PW*scale/2.0;
     (browser.left as f32)<center+half && (browser.right as f32)>center-half
-        && (browser.top as f32)<island.top as f32+crate::app::BAR_H*scale && browser.bottom>island.top
+        && if dock==crate::model::Dock::Bottom {
+            browser.top<island.bottom && (browser.bottom as f32)>island.bottom as f32-crate::app::BAR_H*scale
+        }else{(browser.top as f32)<island.top as f32+crate::app::BAR_H*scale && browser.bottom>island.top}
 }
 
 /// 左右停靠：画布是 SIDE_W × SIDE_H，岛体贴在画布的左 / 右边、竖直居中。
@@ -373,25 +465,117 @@ fn window_covers_side(window:RECT,island:RECT,dock:crate::model::Dock)->bool {
     vertical && horizontal
 }
 
-pub fn browser_at_top(island:HWND,settings:&crate::model::Settings)->Option<bool> {
+pub fn browser_at_top(bounds:RECT,settings:&crate::model::Settings)->Option<bool> {
     unsafe {
         let foreground=GetForegroundWindow();
-        if foreground.0.is_null(){return None;}
+        if foreground.0.is_null(){return Some(false);}
         let mut pid=0;
         GetWindowThreadProcessId(foreground,Some(&mut pid));
         // 设置、托盘和岛内输入沿用此前的避让状态，避免自身窗口引起反复切换。
-        if pid==0 || pid==GetCurrentProcessId(){return None;}
-        let mut browser_rect=RECT::default();let mut island_rect=RECT::default();
-        if GetWindowRect(foreground,&mut browser_rect).is_err() || GetWindowRect(island,&mut island_rect).is_err(){return None;}
-        if !browser_overlaps_island(browser_rect,island_rect,settings.dock){return Some(false);}
-        let Ok(process)=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,false,pid) else{return Some(false)};
-        let mut path=[0u16;1024];let mut length=path.len() as u32;
-        let result=QueryFullProcessImageNameW(process,PROCESS_NAME_WIN32,PWSTR(path.as_mut_ptr()),&mut length);
-        let _=CloseHandle(process);
-        if result.is_err(){return Some(false);}
-        let path=String::from_utf16_lossy(&path[..length as usize]);
-        Some(avoidance_matches(&path,settings))
+        if pid==GetCurrentProcessId(){return None;}
+        if pid==0{return Some(false);}
+        thread_local! { static LAST_MAIN: std::cell::Cell<Option<(HWND,u32)>> = const { std::cell::Cell::new(None) }; }
+        LAST_MAIN.with(|last| avoidance_for_window(foreground,bounds,pid,settings,last,||process_image_path(pid)))
     }
+}
+
+unsafe fn visible_avoidance_rect(hwnd:HWND)->Option<RECT> {
+    if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool(){return None;}
+    let mut cloaked=0u32;
+    let _=windows::Win32::Graphics::Dwm::DwmGetWindowAttribute(hwnd,windows::Win32::Graphics::Dwm::DWMWA_CLOAKED,(&mut cloaked as *mut u32).cast(),4);
+    if cloaked!=0{return None;}
+    let mut rect=RECT::default();
+    GetWindowRect(hwnd,&mut rect).ok()?;
+    Some(rect)
+}
+
+unsafe fn process_image_path(pid:u32)->Option<String> {
+    let process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,false,pid).ok()?;
+    let mut path=vec![0u16;32768];let mut length=path.len() as u32;
+    let result=QueryFullProcessImageNameW(process,PROCESS_NAME_WIN32,PWSTR(path.as_mut_ptr()),&mut length);
+    let _=CloseHandle(process);
+    result.ok()?;
+    Some(String::from_utf16_lossy(&path[..length as usize]))
+}
+
+// 无所有者的工具窗可能在WELL岛启动时就已打开。只有同进程的主窗口唯一时才补认宿主。
+unsafe fn unique_main_window(pid:u32)->Option<HWND> {
+    use windows::Win32::Foundation::{BOOL,LPARAM};
+    struct Search { pid:u32, main:Option<HWND> }
+    unsafe extern "system" fn visit(hwnd:HWND,param:LPARAM)->BOOL {
+        let search=&mut *(param.0 as *mut Search);
+        let mut pid=0;GetWindowThreadProcessId(hwnd,Some(&mut pid));
+        if pid==search.pid && foreground_info(hwnd).app_window && visible_avoidance_rect(hwnd).is_some() {
+            if search.main.is_some(){search.main=None;return BOOL(0);}
+            search.main=Some(hwnd);
+        }
+        BOOL(1)
+    }
+    let mut search=Search{pid,main:None};
+    EnumWindows(Some(visit),LPARAM((&mut search as *mut Search) as isize)).ok()?;
+    search.main
+}
+
+unsafe fn process_covers_island(pid:u32,island:RECT,dock:crate::model::Dock)->bool {
+    use windows::Win32::Foundation::{BOOL,LPARAM};
+    struct Search { pid:u32, island:RECT, dock:crate::model::Dock, covered:bool }
+    unsafe extern "system" fn visit(hwnd:HWND,param:LPARAM)->BOOL {
+        let search=&mut *(param.0 as *mut Search);
+        let mut pid=0;GetWindowThreadProcessId(hwnd,Some(&mut pid));
+        if pid==search.pid && visible_avoidance_rect(hwnd).is_some_and(|rect|browser_overlaps_island(rect,search.island,search.dock)) {
+            search.covered=true;
+            return BOOL(0);
+        }
+        BOOL(1)
+    }
+    let mut search=Search{pid,island,dock,covered:false};
+    let _=EnumWindows(Some(visit),LPARAM((&mut search as *mut Search) as isize));
+    search.covered
+}
+
+unsafe fn avoidance_for_window(foreground:HWND,island:RECT,pid:u32,settings:&crate::model::Settings,last:&std::cell::Cell<Option<(HWND,u32)>>,image_path:impl FnOnce()->Option<String>)->Option<bool> {
+    if !settings.browser_minimal || IsIconic(GetAncestor(foreground,GA_ROOTOWNER)).as_bool(){return Some(false);}
+    let rect=visible_avoidance_rect(foreground);
+    let overlaps=|rect|browser_overlaps_island(rect,island,settings.dock);
+    let owner=GetWindow(foreground,GW_OWNER).ok();
+    let info=foreground_info(foreground);
+    if rect.is_some() && owner.is_none() && info.app_window {last.set(Some((foreground,pid)));}
+    else if rect.is_some() && last.get().is_some_and(|(_,prev)|prev!=pid){last.set(None);}
+    let path=std::cell::LazyCell::new(image_path);
+    let matches=|p:&str|avoidance_matches(p,settings);
+    if rect.is_some_and(overlaps) && path.as_deref().is_some_and(matches){return Some(true);}
+    if !settings.avoid_browsers && settings.avoid_apps.is_empty(){return Some(false);}
+
+    // 3ds Max 的插件可能以独立窗口获得焦点，或短暂无法读取可见矩形。
+    // 只在已登记的 Max 进程仍有窗口实际遮岛时延续避让。
+    if !settings.avoid_apps.is_empty() && path.as_deref().is_some_and(|p| {
+        std::path::Path::new(p).file_name().is_some_and(|name|name.eq_ignore_ascii_case("3dsmax.exe"))
+            && crate::avoidance::contains_app(&settings.avoid_apps,p)
+    }) && process_covers_island(pid,island,settings.dock) {return Some(true);}
+
+    // 浮窗暂时读不到矩形时，仍可沿所有者链找到盖住岛体的窗口。
+    // 这条关系也适用于由其他进程创建的浮窗。
+    let mut parent=owner;
+    while let Some(hwnd)=parent {
+        if IsIconic(hwnd).as_bool(){return Some(false);}
+        if visible_avoidance_rect(hwnd).is_some_and(overlaps) {
+            let mut owner_pid=0;GetWindowThreadProcessId(hwnd,Some(&mut owner_pid));
+            let registered=if owner_pid==pid {path.as_deref().is_some_and(matches)}
+                else {process_image_path(owner_pid).as_deref().is_some_and(matches)};
+            if registered{
+                if foreground_info(hwnd).app_window {last.set(Some((hwnd,owner_pid)));}
+                return Some(true);
+            }
+        }
+        parent=GetWindow(hwnd,GW_OWNER).ok();
+    }
+    if owner.is_some() || info.app_window || !path.as_deref().is_some_and(matches){return Some(false);}
+    // 部分插件工具窗未登记 owner。优先跟随刚才操作的同进程主窗口，每次重新检查其位置。
+    let host=match last.get() {
+        Some((hwnd,prev)) if prev==pid && foreground_info(hwnd).pid==pid=>Some(hwnd),
+        _=>unique_main_window(pid),
+    };
+    Some(host.and_then(|hwnd|visible_avoidance_rect(hwnd)).is_some_and(overlaps))
 }
 
 pub enum Incoming {
@@ -605,12 +789,22 @@ pub fn pick_files() -> Result<Vec<std::path::PathBuf>> {
 }
 
 pub fn pick_files_for(title:&str,multiple:bool) -> Result<Vec<std::path::PathBuf>> {
+    use windows::Win32::UI::Shell::*;
+    let mut options=FOS_FILEMUSTEXIST;
+    if multiple{options|=FOS_ALLOWMULTISELECT;}
+    pick_items_for(title,options)
+}
+
+pub fn pick_folder_for(title:&str) -> Result<Option<std::path::PathBuf>> {
+    use windows::Win32::UI::Shell::*;
+    Ok(pick_items_for(title,FOS_PICKFOLDERS | FOS_PATHMUSTEXIST)?.into_iter().next())
+}
+
+fn pick_items_for(title:&str,options:windows::Win32::UI::Shell::FILEOPENDIALOGOPTIONS) -> Result<Vec<std::path::PathBuf>> {
     unsafe {
         use windows::Win32::UI::Shell::*;
         let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_ALL)?;
-        let mut options=FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST;
-        if multiple{options|=FOS_ALLOWMULTISELECT;}
-        dialog.SetOptions(options)?;
+        dialog.SetOptions(FOS_FORCEFILESYSTEM | options)?;
         dialog.SetTitle(&HSTRING::from(title))?;
         if let Err(e) = dialog.Show(None) {
             if e.code().0 as u32 == 0x800704c7 {
@@ -848,12 +1042,7 @@ pub(crate) fn avoidance_windows()->std::result::Result<Vec<crate::avoidance::Can
         if len==0{return BOOL(1);}
         let mut pid=0;GetWindowThreadProcessId(hwnd,Some(&mut pid));
         if pid==GetCurrentProcessId(){return BOOL(1);}
-        let Ok(process)=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,false,pid)else{return BOOL(1)};
-        let mut path=[0u16;32768];let mut length=path.len() as u32;
-        let result=QueryFullProcessImageNameW(process,PROCESS_NAME_WIN32,PWSTR(path.as_mut_ptr()),&mut length);
-        let _=CloseHandle(process);
-        if result.is_err(){return BOOL(1);}
-        let path=String::from_utf16_lossy(&path[..length as usize]);
+        let Some(path)=process_image_path(pid) else{return BOOL(1)};
         let items=&mut *(param.0 as *mut Vec<crate::avoidance::Candidate>);
         if items.iter().any(|a|crate::avoidance::same_app(&a.path,&path)){return BOOL(1);}
         let filename=std::path::Path::new(&path).file_name().and_then(|s|s.to_str()).unwrap_or("");
@@ -887,6 +1076,137 @@ fn executable_description(path:&str)->Option<String> {
 #[cfg(test)]
 mod avoidance_tests {
     use super::*;
+    #[test]
+    fn registered_3ds_max_uses_visible_same_process_windows_for_avoidance() {
+        unsafe {
+            let create=|x,y,width,height| CreateWindowExW(WS_EX_NOACTIVATE|WS_EX_APPWINDOW,windows::core::w!("STATIC"),
+                windows::core::w!(""),WS_POPUP|WS_VISIBLE,x-10000,y-10000,width,height,None,None,None,None).unwrap();
+            let island=RECT{left:-10000,top:-10000,right:-9040,bottom:-9900};
+            let host=create(0,0,1920,1080);
+            let panel=create(600,300,300,200);
+            let mut settings=crate::model::Settings::default();
+            settings.browser_minimal=true;
+            let path=r"D:\Apps\Autodesk\3DSMAX.EXE";
+            settings.avoid_apps.push((path.into(),"3ds Max".into()));
+            let last=std::cell::Cell::new(None);
+            let poll=|path:&str| {
+                avoidance_for_window(panel,island,GetCurrentProcessId(),&settings,&last,||Some(path.into()))
+            };
+            let detached=poll(path);
+            let unregistered=poll(r"D:\Other\3dsmax.exe");
+            let _=ShowWindow(panel,SW_HIDE);
+            let hidden_panel=poll(path);
+            let _=ShowWindow(panel,SW_SHOWNOACTIVATE);
+            SetWindowPos(host,HWND_BOTTOM,-8000,-10000,1920,1080,SWP_NOACTIVATE).unwrap();
+            let moved=poll(path);
+            SetWindowPos(host,HWND_BOTTOM,-10000,-10000,1920,1080,SWP_NOACTIVATE).unwrap();
+            let _=ShowWindow(host,SW_SHOWMINNOACTIVE);
+            let minimized=poll(path);
+            DestroyWindow(panel).unwrap();
+            DestroyWindow(host).unwrap();
+            assert_eq!(detached,Some(true),"独立浮窗获得焦点时，仍遮住岛的 Max 窗口应触发避让");
+            assert_eq!(hidden_panel,Some(true),"前台浮窗短暂不可用时，仍应检查实际遮住岛的窗口");
+            assert_eq!([unregistered,moved,minimized],[Some(false);3]);
+        }
+    }
+
+    #[test]
+    fn registered_app_keeps_avoidance_when_its_plugin_panel_takes_focus() {
+        unsafe {
+            let create=|x,y,width,height,owner,ex| CreateWindowExW(WS_EX_NOACTIVATE|ex,windows::core::w!("STATIC"),
+                windows::core::w!(""),WS_POPUP|WS_VISIBLE,x-10000,y-10000,width,height,owner,None,None,None).unwrap();
+            let island=create(0,0,960,100,None,WS_EX_TOOLWINDOW);
+            let host=create(0,0,1920,1080,None,WS_EX_APPWINDOW);
+            let panel=create(600,300,300,200,Some(&host),WS_EX_TOOLWINDOW);
+            let path=std::env::current_exe().unwrap();
+            let mut settings=crate::model::Settings::default();
+            settings.browser_minimal=true;
+            settings.avoid_apps.push((path.to_string_lossy().into_owned(),"测试宿主".into()));
+            let last=std::cell::Cell::new(None);
+            let mut island_rect=RECT::default();
+            GetWindowRect(island,&mut island_rect).unwrap();
+            let poll=|window,settings:&crate::model::Settings| {
+                let pid=GetCurrentProcessId();
+                avoidance_for_window(window,island_rect,pid,settings,&last,||process_image_path(pid))
+            };
+            let results=[poll(host,&settings),poll(panel,&settings),poll(host,&settings)];
+            let detached=create(600,300,300,200,None,WS_EX_TOOLWINDOW);
+            let nested=create(700,400,100,100,Some(&panel),WS_EX_TOOLWINDOW);
+            assert_eq!(poll(detached,&settings),Some(true),"无 owner 的同进程工具窗沿用刚获得焦点的主窗口");
+            assert_eq!(poll(nested,&settings),Some(true),"嵌套插件对话框应找到宿主");
+            assert_eq!(avoidance_for_window(panel,island_rect,0,&settings,&last,||None),Some(true),"面板进程不可识别时仍可通过所有者识别宿主");
+            let independent=create(600,300,300,200,None,WS_EX_APPWINDOW);
+            last.set(None);
+            assert_eq!(poll(detached,&settings),Some(false),"两个可见主窗且无法确定宿主时，不借用后台窗口");
+            let small=poll(independent,&settings);
+            assert_eq!(poll(detached,&settings),Some(false),"当前主窗不遮岛时不能借用同进程另一个大窗");
+            SetWindowPos(independent,HWND_BOTTOM,-9700,-9995,96,80,SWP_NOACTIVATE).unwrap();
+            assert_eq!(poll(independent,&settings),Some(true),"小窗确实遮住岛时也要避让");
+            assert_eq!(poll(host,&settings),Some(true));
+
+            SetWindowPos(host,HWND_BOTTOM,-8000,-10000,1920,1080,SWP_NOACTIVATE).unwrap();
+            let other_screen=[poll(host,&settings),poll(panel,&settings)];
+            SetWindowPos(panel,HWND_TOP,-9700,-9995,96,80,SWP_NOACTIVATE).unwrap();
+            assert_eq!(poll(panel,&settings),Some(true),"宿主在副屏时，浮窗自身遮住岛也应避让");
+            SetWindowPos(panel,HWND_TOP,-9400,-9700,300,200,SWP_NOACTIVATE).unwrap();
+            SetWindowPos(host,HWND_BOTTOM,-10000,-10000,1920,1080,SWP_NOACTIVATE).unwrap();
+            let _=ShowWindow(host,SW_SHOWMINNOACTIVE);
+            assert!(IsIconic(host).as_bool());
+            let minimized=poll(host,&settings);
+            let minimized_owner=poll(panel,&settings);
+            let _=ShowWindow(host,SW_SHOWNOACTIVATE);
+            let _=ShowWindow(panel,SW_HIDE);
+            let hidden_panel=poll(panel,&settings);
+            let hidden_panel_with_unknown_process=avoidance_for_window(panel,island_rect,0,&settings,&last,||None);
+            let _=ShowWindow(detached,SW_HIDE);
+            let hidden_tool=poll(detached,&settings);
+            let _=ShowWindow(independent,SW_HIDE);
+            let hidden_independent=poll(independent,&settings);
+            let _=ShowWindow(host,SW_HIDE);
+            let hidden_host=poll(panel,&settings);
+            let _=ShowWindow(host,SW_SHOWNOACTIVATE);
+            let _=ShowWindow(panel,SW_SHOWNOACTIVATE);
+            settings.browser_minimal=false;
+            let disabled=poll(panel,&settings);
+            settings.browser_minimal=true;
+            settings.avoid_apps.clear();
+            let removed=poll(panel,&settings);
+            DestroyWindow(detached).unwrap();
+            DestroyWindow(independent).unwrap();
+            DestroyWindow(host).unwrap();
+            DestroyWindow(island).unwrap();
+            assert_eq!(results,[Some(true);3],"焦点从宿主切到中央插件浮窗再切回时应持续避让");
+            assert_eq!(small,Some(false),"同进程的独立小窗只检查自己的位置");
+            assert_eq!(other_screen,[Some(false);2],"主窗口移到副屏后，浮窗也应停止避让");
+            assert_eq!([hidden_panel,hidden_panel_with_unknown_process,hidden_tool],[Some(true);3],"前台浮窗不可见时仍应检查已识别的宿主");
+            assert_eq!([minimized,minimized_owner,hidden_host,hidden_independent],[Some(false);4],"宿主收起或隐藏时结束避让，独立小窗也不能借用后台窗口");
+            assert_eq!((disabled,removed),(Some(false),Some(false)));
+        }
+    }
+
+    #[test]
+    fn browser_popup_follows_its_owner_when_browser_avoidance_is_enabled() {
+        unsafe {
+            let create=|x,y,width,height,owner| CreateWindowExW(WS_EX_NOACTIVATE,windows::core::w!("STATIC"),
+                windows::core::w!(""),WS_POPUP|WS_VISIBLE,x-10000,y-10000,width,height,owner,None,None,None).unwrap();
+            let island=RECT{left:-10000,top:-10000,right:-9040,bottom:-9900};
+            let host=create(0,0,1920,1080,None);
+            let panel=create(600,300,300,200,Some(&host));
+            let _=ShowWindow(panel,SW_HIDE);
+            let mut settings=crate::model::Settings::default();
+            settings.browser_minimal=true;
+            let last=std::cell::Cell::new(None);
+            let poll=|settings:&crate::model::Settings| {
+                avoidance_for_window(panel,island,GetCurrentProcessId(),settings,&last,||Some(r"D:\Apps\chrome.exe".into()))
+            };
+            let enabled=poll(&settings);
+            settings.avoid_browsers=false;
+            let disabled=poll(&settings);
+            DestroyWindow(host).unwrap();
+            assert_eq!((enabled,disabled),(Some(true),Some(false)));
+        }
+    }
+
     #[test]
     fn avoidance_respects_master_browser_switch_and_custom_app_identity() {
         let mut settings=crate::model::Settings::default();

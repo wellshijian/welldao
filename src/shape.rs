@@ -17,6 +17,7 @@ impl EdgeMap {
     pub fn of(rect: Rect, dock: Dock) -> (EdgeMap, Rect) {
         match dock {
             Dock::Top => (Self::TOP, rect),
+            Dock::Bottom => (EdgeMap { dock, edge: rect.bottom() }, Rect::from_min_size(Pos2::new(rect.left(), 0.0), rect.size())),
             Dock::Left => (EdgeMap { dock, edge: rect.left() }, Rect::from_min_max(Pos2::new(rect.top(), 0.0), Pos2::new(rect.bottom(), rect.width()))),
             Dock::Right => (EdgeMap { dock, edge: rect.right() }, Rect::from_min_max(Pos2::new(rect.top(), 0.0), Pos2::new(rect.bottom(), rect.width()))),
         }
@@ -24,11 +25,12 @@ impl EdgeMap {
     pub fn apply(self, p: Pos2) -> Pos2 {
         match self.dock {
             Dock::Top => p,
+            Dock::Bottom => Pos2::new(p.x, self.edge - p.y),
             Dock::Left => Pos2::new(self.edge + p.y, p.x),
             Dock::Right => Pos2::new(self.edge - p.y, p.x),
         }
     }
-    fn code(self) -> f32 { match self.dock { Dock::Top => 0.0, Dock::Left => 1.0, Dock::Right => 2.0 } }
+    fn code(self) -> f32 { match self.dock { Dock::Top => 0.0, Dock::Bottom => 3.0, Dock::Left => 1.0, Dock::Right => 2.0 } }
 }
 
 /// 贴着 `dock` 边缘的轮廓（屏幕坐标）。
@@ -137,7 +139,7 @@ impl egui::cache::ComputerMut<FillKey,std::sync::Arc<egui::Mesh>> for FillComput
         let [x0,y0,x1,y1,flare,flare_h,radius,feather,span,dock,edge]=bits.map(f32::from_bits);
         let mut mesh=gradient_mesh(Rect::from_min_max(Pos2::new(x0,y0),Pos2::new(x1,y1)),flare,flare_h,radius,top,bottom,span,feather);
         if dock!=0.0 {
-            let map=EdgeMap{dock:if dock==1.0{Dock::Left}else{Dock::Right},edge};
+            let map=EdgeMap{dock:if dock==1.0{Dock::Left}else if dock==2.0{Dock::Right}else{Dock::Bottom},edge};
             for v in &mut mesh.vertices {v.pos=map.apply(v.pos);}
         }
         std::sync::Arc::new(mesh)

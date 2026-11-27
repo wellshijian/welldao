@@ -141,8 +141,8 @@ fn health_entering_fullscreen_clears_active_and_queued_popups_only(){
     let health=|alert:&crate::extras::Alert|alert.health().is_some();
     assert!(!h.app.notice.as_ref().is_some_and(health) && !h.app.hud_notice.as_ref().is_some_and(health),"全屏隐藏时清除正在显示的健康横幅");
     assert!(!h.app.alerts.iter().any(health),"健康提醒不能留在弹窗队列里等退出后重播");
-    assert!(!h.cmds.iter().any(|cmd|matches!(cmd,crate::app::Cmd::Notify(title,_)if title=="喝水时间到了" || title==crate::app::SIT_TITLE)),"尚未发出的健康系统通知也要抑制");
-    assert!(h.cmds.iter().any(|cmd|matches!(cmd,crate::app::Cmd::Notify(title,_)if title=="待办到时间了")),"其他类型提醒沿用原有逻辑");
+    assert!(!h.cmds.iter().any(|cmd|matches!(cmd,crate::app::Cmd::Notify(title,..)if title=="喝水时间到了" || title==crate::app::SIT_TITLE)),"尚未发出的健康系统通知也要抑制");
+    assert!(h.cmds.iter().any(|cmd|matches!(cmd,crate::app::Cmd::Notify(title,..)if title=="待办到时间了")),"其他类型提醒沿用原有逻辑");
     assert_eq!(h.app.health_pending,[true,true]);
     h.fullscreen=false;h.frame(vec![]);
     assert!(!h.app.notice.as_ref().is_some_and(health));
@@ -236,4 +236,53 @@ fn health_reminder_gallery(){
             shoot_unread(&mut h,&mut raster,&dest,"health-settings-time",60,Some(H::local(100.0,60.0)));
         }
     }
+}
+
+#[test]
+fn system_notify_off_keeps_island_alert_without_windows_notification(){
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();h.frame(vec![]);
+    h.app.settings.notifications=true;h.app.settings.system_notify=false;h.app.settings.sound=true;
+    h.cmds.clear();h.app.alert("待办到时间了","检查周报",4,true);h.frame(vec![]);
+    assert!(h.app.notice.as_ref().is_some_and(|a|a.title=="待办到时间了") || h.app.alerts.iter().any(|a|a.title=="待办到时间了"),"关闭系统通知后岛上仍要提醒");
+    assert!(!h.cmds.iter().any(|cmd|matches!(cmd,crate::app::Cmd::Notify(..))),"关闭系统通知后不能再发 Windows 通知");
+    assert!(!h.app.pending.iter().any(|cmd|matches!(cmd,crate::app::Cmd::Notify(..))),"也不能留在待发队列里");
+}
+
+#[test]
+fn health_sound_follows_delivery_mode_and_only_rings_when_first_due() {
+    use crate::app::{Cmd, NotificationSound};
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    for (enabled,system,sound,expected) in [
+        (true,true,true,Some(NotificationSound::Health)),
+        (true,true,false,Some(NotificationSound::Silent)),
+        (true,false,true,None),
+        (false,true,true,None),
+    ] {
+        let mut h=H::new();
+        h.app.settings.notifications=enabled;
+        h.app.settings.system_notify=system;
+        h.app.settings.sound=sound;
+        for kind in crate::extras::HealthReminder::ALL {
+            h.app.pending.clear();
+            h.app.alert(kind.title(),"到时间了",2,true);
+            h.app.alert(kind.title(),"到时间了",2,true);
+            let sounds:Vec<_>=h.app.pending.iter().filter_map(|cmd|match cmd {
+                Cmd::Notify(title,_,sound) if title==kind.title()=>Some(*sound),
+                _=>None,
+            }).collect();
+            assert_eq!(sounds,expected.into_iter().collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
+fn system_notify_defaults_on_and_persists(){
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();h.frame(vec![]);
+    assert!(crate::model::Settings::default().system_notify,"默认开启，老用户升级后行为不变");
+    h.cmds.clear();h.app.alert("待办到时间了","检查周报",4,true);h.frame(vec![]);
+    assert!(h.cmds.iter().any(|cmd|matches!(cmd,crate::app::Cmd::Notify(t,..)if t=="待办到时间了")),"默认仍发送系统通知");
+    h.app.settings.system_notify=false;h.app.settings.save();
+    assert!(!crate::model::Settings::load().system_notify,"关闭后重启仍保持关闭");
+    h.app.settings.system_notify=true;h.app.settings.save();
+    assert!(crate::model::Settings::load().system_notify);
 }

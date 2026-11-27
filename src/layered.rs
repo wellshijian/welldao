@@ -33,10 +33,13 @@ pub const AMBIENT_READBACK: std::time::Duration = std::time::Duration::from_mill
 
 /// 这一帧要不要请求下一次读回：`None` 立即请求；`Some(d)` 先等 d 再重绘、到时再请求（保证最后一帧不会漏掉）。
 /// 拖动、悬停、点击等有输入的帧保持满帧，跟手不打折扣。
-pub fn readback_delay(last: Option<std::time::Instant>, now: std::time::Instant, interactive: bool) -> Option<std::time::Duration> {
+/// `pace` 是界面自己要求的重绘间隔（宠物 20 帧 / 睡眠 10 帧 / 媒体 30 帧）：读回不能比它更密。
+/// 否则每次读回产生的截图事件会再触发一帧、发现画面变了又读回，把只需 10 帧的宠物动画带到约 60 帧（#170 排查，DX12 下闲置约占 17% 单核）。
+pub fn readback_delay(last: Option<std::time::Instant>, now: std::time::Instant, interactive: bool, pace: std::time::Duration) -> Option<std::time::Duration> {
     if interactive { return None; }
+    let interval = AMBIENT_READBACK.max(pace);
     let elapsed = now.saturating_duration_since(last?);
-    (elapsed < AMBIENT_READBACK).then(|| AMBIENT_READBACK - elapsed)
+    (elapsed < interval).then(|| interval - elapsed)
 }
 
 /// 读回的画面里必须真的有透明像素（画布四角一定是透明的），否则说明这条路径读不到 alpha，
@@ -137,13 +140,19 @@ fn create_display_window() -> windows::core::Result<HWND> {
 }
 
 /// 让WELL岛窗口自身几乎不可见但仍可命中；winit 改样式时可能抹掉分层位，每帧兜底。
-unsafe fn hide_owner(owner: HWND) -> windows::core::Result<()> {
+unsafe fn hide_owner(owner: HWND, first_frame: bool) -> windows::core::Result<()> {
     let ex = GetWindowLongPtrW(owner, GWL_EXSTYLE);
     if ex & WS_EX_LAYERED.0 as isize == 0 {
         SetWindowLongPtrW(owner, GWL_EXSTYLE, ex | WS_EX_LAYERED.0 as isize);
+    }
+    if first_frame || ex & WS_EX_LAYERED.0 as isize == 0 {
         SetLayeredWindowAttributes(owner, COLORREF(0), OWNER_ALPHA, LWA_ALPHA)?;
     }
     Ok(())
+}
+
+unsafe fn owner_visible(owner: HWND) -> bool {
+    IsWindowVisible(owner).as_bool() && GetWindowRgnBox(owner, &mut RECT::default()) != NULLREGION
 }
 
 /// 层级上紧挨在下面的可见窗口（跳过输入法等隐藏的辅助窗口）。
@@ -164,6 +173,7 @@ pub struct Layered {
     bits: *mut u8,
     size: (i32, i32),
     last: Option<u64>,
+    owner_offset_x: i32,
 }
 
 impl Layered {
@@ -174,7 +184,7 @@ impl Layered {
             unsafe { let _ = DestroyWindow(display); }
             return Err(windows::core::Error::from_win32());
         }
-        Ok(Self { display, dc, bitmap: HBITMAP::default(), old: HGDIOBJ::default(), bits: std::ptr::null_mut(), size: (0, 0), last: None })
+        Ok(Self { display, dc, bitmap: HBITMAP::default(), old: HGDIOBJ::default(), bits: std::ptr::null_mut(), size: (0, 0), last: None, owner_offset_x: 0 })
     }
 
     pub(crate) fn display(&self) -> HWND { self.display }
@@ -219,12 +229,21 @@ impl Layered {
     /// 把一帧（RGBA，已预乘）交给显示窗口。画面没变返回 Ok(false)；
     /// 尺寸与WELL岛窗口当前大小不符（读回之后窗口又改了大小）时跳过，等下一帧。
     pub fn present(&mut self, owner: HWND, size: [usize; 2], rgba: &[u8]) -> windows::core::Result<bool> {
+        self.present_inner(owner,size,rgba,false)
+    }
+
+    /// 外框交接时先亮出原位置的旧画面，再把主 HWND 的画面隐藏。
+    pub(crate) fn cover(&mut self, owner:HWND, size:[usize;2], rgba:&[u8])->windows::core::Result<bool> {
+        self.present_inner(owner,size,rgba,true)
+    }
+
+    fn present_inner(&mut self, owner:HWND, size:[usize;2], rgba:&[u8], cover:bool)->windows::core::Result<bool> {
         let (w, h) = (size[0] as i32, size[1] as i32);
         let mut rect = RECT::default();
         unsafe { GetWindowRect(owner, &mut rect)?; }
         if (rect.right - rect.left, rect.bottom - rect.top) != (w, h) || rgba.len() != size[0] * size[1] * 4 { return Ok(false); }
         let hash = image_hash(size, rgba);
-        if self.last == Some(hash) { return Ok(false); }
+        if self.last == Some(hash) && self.owner_offset_x == 0 { return Ok(false); }
         if !self.ensure_bitmap(w, h) { return Err(windows::core::Error::from_win32()); }
         unsafe {
             let dst = std::slice::from_raw_parts_mut(self.bits, rgba.len());
@@ -235,30 +254,41 @@ impl Layered {
             let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
             let (src, dst_pos, sz) = (POINT::default(), POINT { x: rect.left, y: rect.top }, SIZE { cx: w, cy: h });
             UpdateLayeredWindow(self.display, None, Some(&dst_pos), Some(&sz), self.dc, Some(&src), COLORREF(0), Some(&blend), ULW_ALPHA)?;
+            // 首次接管时，先显示已有像素的显示层，再淡化仍可见的主窗口。
+            if cover || self.last.is_none() && owner_visible(owner) {
+                SetWindowPos(self.display,HWND_TOPMOST,rect.left,rect.top,0,0,SWP_NOACTIVATE|SWP_NOSIZE|SWP_SHOWWINDOW)?;
+            }
             // 显示窗口有了内容之后才把WELL岛窗口自身藏起来，避免切换瞬间什么都看不到。
-            hide_owner(owner)?;
+            hide_owner(owner, self.last.is_none())?;
         }
         self.last = Some(hash);
-        self.sync(owner, false);
+        self.owner_offset_x = 0;
+        if !cover {self.sync(owner, false);}
         Ok(true)
+    }
+
+    /// 背景画布加宽时，旧画面留在原位置，等新尺寸的帧接管。
+    pub(crate) fn keep_frame_position_after_widening(&mut self, owner_shift_x: i32) {
+        self.owner_offset_x -= owner_shift_x;
     }
 
     /// 每帧跟随WELL岛窗口：可见性、位置，以及紧贴在它正上方的层级。
     pub fn sync(&mut self, owner: HWND, raise: bool) {
         if self.last.is_none() { return; }
         unsafe {
-            let _ = hide_owner(owner);
-            let owner_visible = IsWindowVisible(owner).as_bool();
+            let _ = hide_owner(owner, false);
+            // 全屏隐藏只清空主窗口区域，仍需同步隐藏独立的显示层。
             let display_visible = IsWindowVisible(self.display).as_bool();
-            if !owner_visible {
+            if !owner_visible(owner) {
                 if display_visible { let _ = ShowWindow(self.display, SW_HIDE); }
                 return;
             }
             let (mut o, mut d) = (RECT::default(), RECT::default());
             if GetWindowRect(owner, &mut o).is_err() || GetWindowRect(self.display, &mut d).is_err() { return; }
             let flags = SWP_NOACTIVATE | SWP_NOSIZE;
-            if (o.left, o.top) != (d.left, d.top) || !display_visible || raise {
-                let _ = SetWindowPos(self.display, HWND_TOPMOST, o.left, o.top, 0, 0, flags | SWP_SHOWWINDOW);
+            let x = o.left + self.owner_offset_x;
+            if (x, o.top) != (d.left, d.top) || !display_visible || raise {
+                let _ = SetWindowPos(self.display, HWND_TOPMOST, x, o.top, 0, 0, flags | SWP_SHOWWINDOW);
             }
             // WELL岛窗口紧贴在显示窗口下面：别的置顶窗口不会夹在两者之间。
             if next_visible(self.display) != Some(owner) {
@@ -275,6 +305,7 @@ impl Layered {
             let _ = ShowWindow(self.display, SW_HIDE);
         }
         self.last = None;
+        self.owner_offset_x = 0;
     }
 }
 
@@ -296,17 +327,43 @@ mod tests {
     fn ambient_animation_readback_is_paced_but_input_stays_full_rate() {
         use std::time::{Duration, Instant};
         let now = Instant::now();
-        assert_eq!(readback_delay(None, now, false), None, "第一次读回不等待");
-        assert_eq!(readback_delay(Some(now), now + Duration::from_millis(10), false), Some(Duration::from_millis(23)), "动画期间未到间隔时延后");
-        assert_eq!(readback_delay(Some(now), now + AMBIENT_READBACK, false), None, "到间隔立即读回");
-        assert_eq!(readback_delay(Some(now), now + Duration::from_millis(1), true), None, "有输入时保持满帧");
-        // 60 帧/秒的动画持续 1 秒：读回次数减半左右。
-        let (mut last, mut count) = (None, 0);
-        for frame in 0..60u64 {
-            let t = now + Duration::from_micros(frame * 16_667);
-            if readback_delay(last, t, false).is_none() { last = Some(t); count += 1; }
-        }
-        assert!((28..=31).contains(&count), "约 30 次/秒，实际 {count}");
+        let media = Duration::from_millis(33);
+        assert_eq!(readback_delay(None, now, false, media), None, "第一次读回不等待");
+        assert_eq!(readback_delay(Some(now), now + Duration::from_millis(10), false, media), Some(Duration::from_millis(23)), "动画期间未到间隔时延后");
+        assert_eq!(readback_delay(Some(now), now + AMBIENT_READBACK, false, media), None, "到间隔立即读回");
+        assert_eq!(readback_delay(Some(now), now + Duration::from_millis(1), true, Duration::from_millis(100)), None, "有输入时保持满帧");
+        assert_eq!(readback_delay(Some(now), now + Duration::from_millis(1), false, Duration::from_millis(16)), Some(Duration::from_millis(32)), "界面要 60 帧时读回仍不超过约 30 次/秒");
+        // 每 16.7ms 来一帧（截图事件会不断触发新帧），持续 1 秒：读回次数跟着界面自己的节奏走。
+        let count = |pace: Duration| {
+            let (mut last, mut count) = (None, 0);
+            for frame in 0..60u64 {
+                let t = now + Duration::from_micros(frame * 16_667);
+                if readback_delay(last, t, false, pace).is_none() { last = Some(t); count += 1; }
+            }
+            count
+        };
+        assert!((28..=31).contains(&count(media)), "歌词等媒体动画约 30 次/秒，实际 {}", count(media));
+        assert!((9..=11).contains(&count(Duration::from_millis(100))), "宠物睡眠只需约 10 次/秒，实际 {}", count(Duration::from_millis(100)));
+        assert!((19..=21).contains(&count(Duration::from_millis(50))), "宠物表情约 20 次/秒，实际 {}", count(Duration::from_millis(50)));
+    }
+
+    /// 兼容渲染每次读回都会发截图命令、收到截图事件：这两步本身不能再触发重绘（vendor/egui 的修改），
+    /// 否则 egui「每个立即请求画两帧」的规则会把只需 10～20 帧的宠物动画带到 60 帧。
+    #[test]
+    fn screenshot_plumbing_does_not_request_extra_frames() {
+        use eframe::egui;
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |_| {});
+        let _ = ctx.run(egui::RawInput::default(), |ctx| ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default())));
+        let _ = ctx.run(egui::RawInput::default(), |_| {});
+        assert!(!ctx.has_requested_repaint(), "截图命令拍的是本帧，不应再请求重绘");
+        let image = std::sync::Arc::new(egui::ColorImage::new([1, 1], egui::Color32::BLACK));
+        let shot = egui::RawInput { events: vec![egui::Event::Screenshot { viewport_id: egui::ViewportId::ROOT, user_data: Default::default(), image }], ..Default::default() };
+        let _ = ctx.run(shot, |_| {});
+        assert!(!ctx.has_requested_repaint(), "截图事件不是用户输入，不应再多画两帧");
+        let click = egui::RawInput { events: vec![egui::Event::PointerMoved(egui::pos2(1.0, 1.0))], ..Default::default() };
+        let _ = ctx.run(click, |_| {});
+        assert!(ctx.has_requested_repaint(), "真正的输入照常立即重绘");
     }
 
     #[test]
@@ -418,6 +475,27 @@ mod tests {
             let mut d = RECT::default();
             GetWindowRect(layered.display(), &mut d).unwrap();
             assert_eq!((d.left, d.top), (-9000, -9000), "窗口移动后显示窗口跟随");
+            SetWindowPos(owner, None, -9002, -9000, 8, 2, SWP_NOZORDER | SWP_NOACTIVATE).unwrap();
+            layered.keep_frame_position_after_widening(-2);
+            assert!(!layered.present(owner, [4, 2], &px).unwrap(), "加宽后跳过上一尺寸的帧");
+            layered.sync(owner, false);
+            GetWindowRect(layered.display(), &mut d).unwrap();
+            assert_eq!(d.left, -9000, "加宽画布时旧画面留在原位");
+            assert!(layered.present(owner, [8, 2], &[0; 64]).unwrap());
+            GetWindowRect(layered.display(), &mut d).unwrap();
+            assert_eq!(d.left, -9002, "新一帧改用新的画布坐标");
+            SetWindowPos(owner, None, -9000, -9000, 4, 2, SWP_NOZORDER | SWP_NOACTIVATE).unwrap();
+            // 全屏隐藏保留主窗口的事件循环，仅清空它的窗口区域。
+            assert_ne!(SetWindowRgn(owner, CreateRectRgn(0, 0, 0, 0), true), 0);
+            assert!(IsWindowVisible(owner).as_bool());
+            layered.sync(owner, false);
+            assert!(!IsWindowVisible(layered.display()).as_bool(), "进入全屏后显示层仍然可见");
+            px[4] = 32;
+            assert!(layered.present(owner, [4, 2], &px).unwrap());
+            assert!(!IsWindowVisible(layered.display()).as_bool(), "迟到的读回帧重新显示了WELL岛");
+            assert_ne!(SetWindowRgn(owner, CreateRectRgn(0, 0, 4, 1), true), 0);
+            layered.sync(owner, false);
+            assert!(IsWindowVisible(layered.display()).as_bool(), "恢复为细线时也应立即显示");
             let _ = ShowWindow(owner, SW_HIDE);
             layered.sync(owner, false);
             assert!(!IsWindowVisible(layered.display()).as_bool(), "WELL岛窗口隐藏时显示窗口一起隐藏");

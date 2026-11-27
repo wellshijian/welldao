@@ -81,6 +81,8 @@ pub struct Viewport {
     deferred_commands: Vec<egui::viewport::ViewportCommand>,
     info: ViewportInfo,
     actions_requested: HashSet<ActionRequested>,
+    capture_deadline: Option<Instant>,
+    root_surface_size: Option<[u32; 2]>,
 
     /// `None` for sync viewports.
     viewport_ui_cb: Option<Arc<DeferredViewportUiCallback>>,
@@ -173,15 +175,41 @@ impl<'app> WgpuWinitApp<'app> {
         Ok(())
     }
 
-    fn init_run_state(
+    fn create_root_window(
         &mut self,
-        egui_ctx: egui::Context,
+        egui_ctx: &egui::Context,
         event_loop: &ActiveEventLoop,
-        storage: Option<Box<dyn Storage>>,
+        builder: &ViewportBuilder,
+        settings: Option<egui_winit::WindowSettings>,
+    ) -> Result<(Arc<Window>, egui_wgpu::winit::Painter)> {
+        #[cfg(all(windows, feature = "direct-composition"))]
+        if self.native_options.wgpu_options.direct_composition {
+            let attempt = (|| {
+                let window =
+                    egui_winit::create_window_without_redirection(egui_ctx, event_loop, builder)?;
+                epi_integration::apply_window_settings(&window, settings);
+                self.attach_root_window(egui_ctx, window)
+            })();
+            match attempt {
+                Ok(window_and_painter) => return Ok(window_and_painter),
+                Err(error) => {
+                    // 重建带重定向位图的窗口。普通 HWND 交换链依赖这块位图。
+                    egui_wgpu::winit::record_direct_composition_error(error.to_string());
+                    self.native_options.wgpu_options.direct_composition = false;
+                }
+            }
+        }
+
+        let window = egui_winit::create_window(egui_ctx, event_loop, builder)?;
+        epi_integration::apply_window_settings(&window, settings);
+        self.attach_root_window(egui_ctx, window)
+    }
+
+    fn attach_root_window(
+        &self,
+        egui_ctx: &egui::Context,
         window: Window,
-        builder: ViewportBuilder,
-    ) -> crate::Result<&mut WgpuWinitRunning<'app>> {
-        profiling::function_scope!();
+    ) -> Result<(Arc<Window>, egui_wgpu::winit::Painter)> {
         #[allow(unsafe_code, unused_mut, unused_unsafe)]
         let mut painter = pollster::block_on(egui_wgpu::winit::Painter::new(
             egui_ctx.clone(),
@@ -201,6 +229,29 @@ impl<'app> WgpuWinitApp<'app> {
             profiling::scope!("set_window");
             pollster::block_on(painter.set_window(ViewportId::ROOT, Some(window.clone())))?;
         }
+
+        Ok((window, painter))
+    }
+
+    fn init_run_state(
+        &mut self,
+        egui_ctx: egui::Context,
+        event_loop: &ActiveEventLoop,
+        storage: Option<Box<dyn Storage>>,
+    ) -> crate::Result<&mut WgpuWinitRunning<'app>> {
+        profiling::function_scope!();
+
+        let window_settings = epi_integration::load_window_settings(storage.as_deref());
+        let builder = epi_integration::viewport_builder(
+            egui_ctx.zoom_factor(),
+            event_loop,
+            &mut self.native_options,
+            window_settings,
+        )
+        .with_visible(false); // 先渲染首帧，避免启动时白闪。
+
+        let (window, painter) =
+            self.create_root_window(&egui_ctx, event_loop, &builder, window_settings)?;
 
         let wgpu_render_state = painter.render_state();
 
@@ -288,6 +339,8 @@ impl<'app> WgpuWinitApp<'app> {
                 deferred_commands: vec![],
                 info,
                 actions_requested: Default::default(),
+                capture_deadline: None,
+                root_surface_size: None,
                 viewport_ui_cb: None,
                 window: Some(window),
                 egui_winit: Some(egui_winit),
@@ -403,13 +456,7 @@ impl WinitApp for WgpuWinitApp<'_> {
                 )
             };
             let egui_ctx = winit_integration::create_egui_context(storage.as_deref());
-            let (window, builder) = create_window(
-                &egui_ctx,
-                event_loop,
-                storage.as_deref(),
-                &mut self.native_options,
-            )?;
-            self.init_run_state(egui_ctx, event_loop, storage, window, builder)?
+            self.init_run_state(egui_ctx, event_loop, storage)?
         };
 
         let viewport = &running.shared.borrow().viewports[&ViewportId::ROOT];
@@ -462,7 +509,17 @@ impl WinitApp for WgpuWinitApp<'_> {
         self.initialized_all_windows(event_loop);
 
         if let Some(running) = &mut self.running {
-            Ok(running.on_window_event(window_id, &event))
+            let result = running.on_window_event(window_id, &event);
+            #[cfg(all(windows, feature = "direct-composition"))]
+            if let Some(error) = running
+                .shared
+                .borrow_mut()
+                .painter
+                .take_direct_composition_error()
+            {
+                return Err(error.into());
+            }
+            Ok(result)
         } else {
             Ok(EventResult::Wait)
         }
@@ -578,6 +635,17 @@ impl WgpuWinitRunning<'_> {
                 return Ok(EventResult::Wait);
             };
 
+            integration.frame.interactive_frame_start = viewport.capture_deadline.take().map(|deadline| {
+                // 在取输入前用完应用已有的帧间隔，避免提早取走尚未就绪的一批截图。
+                if let Some(delay) = deadline.checked_duration_since(Instant::now()) {
+                    std::thread::sleep(delay);
+                }
+                let start = Instant::now();
+                if let Some(state) = &integration.frame.wgpu_render_state {
+                    let _ = state.device.poll(wgpu::Maintain::Poll);
+                }
+                start
+            });
             let Viewport {
                 viewport_ui_cb,
                 window,
@@ -642,7 +710,7 @@ impl WgpuWinitRunning<'_> {
             textures_delta,
             shapes,
             pixels_per_point,
-            viewport_output,
+            mut viewport_output,
         } = full_output;
 
         remove_viewports_not_in(viewports, painter, viewport_from_window, &viewport_output);
@@ -656,18 +724,40 @@ impl WgpuWinitRunning<'_> {
         let Viewport {
             window: Some(window),
             egui_winit: Some(egui_winit),
+            root_surface_size,
             ..
         } = viewport
         else {
             return Ok(EventResult::Wait);
         };
 
+        let root_offset = integration.root_window_offset(viewport_id);
+        let mut clipped_primitives = egui_ctx.tessellate(shapes, pixels_per_point);
         if viewport_id == ViewportId::ROOT {
+            if let Some(offset) = root_offset {
+                super::epi_integration::translate_root_output(
+                    &mut platform_output,
+                    &mut clipped_primitives,
+                    offset,
+                    pixels_per_point,
+                );
+            }
             crate::scale_root_output(&mut platform_output, crate::root_viewport_scale());
         }
         egui_winit.handle_platform_output(window, platform_output);
 
-        let clipped_primitives = egui_ctx.tessellate(shapes, pixels_per_point);
+        if root_offset.is_some() {
+            let size: [u32; 2] = window.inner_size().into();
+            if *root_surface_size != Some(size) {
+                if let [Some(width), Some(height)] = size.map(NonZeroU32::new) {
+                    // 本帧已调整客户区，运行绘制前同步交换链的物理尺寸。
+                    painter.on_window_resized(viewport_id, width, height);
+                    *root_surface_size = Some(size);
+                }
+            }
+        } else {
+            *root_surface_size = None;
+        }
 
         let mut screenshot_commands = vec![];
         viewport.actions_requested.retain(|cmd| {
@@ -678,6 +768,19 @@ impl WgpuWinitRunning<'_> {
                 true
             }
         });
+        if let Some(output) = viewport_output.get_mut(&viewport_id) {
+            // 常规窗口命令在绘制后处理；翻页截图要在本帧提交，并且只提交一次。
+            output.commands.retain(|cmd| {
+                if let egui::ViewportCommand::Screenshot(data) = cmd {
+                    if let Some(capture) = data.data.as_ref().and_then(|tag| tag.downcast_ref::<crate::InteractiveCapture>()) {
+                        screenshot_commands.push(data.clone());
+                        viewport.capture_deadline = Some(capture.0);
+                        return false;
+                    }
+                }
+                true
+            });
+        }
         let vsync_secs = painter.paint_and_update_textures(
             viewport_id,
             pixels_per_point,
@@ -686,6 +789,10 @@ impl WgpuWinitRunning<'_> {
             &textures_delta,
             screenshot_commands,
         );
+        #[cfg(all(windows, feature = "direct-composition"))]
+        if let Some(error) = painter.take_direct_composition_error() {
+            return Err(error.into());
+        }
 
         for action in viewport.actions_requested.drain() {
             match action {
@@ -792,7 +899,9 @@ impl WgpuWinitRunning<'_> {
                 // Resize with 0 width and height is used by winit to signal a minimize event on Windows.
                 // See: https://github.com/rust-windowing/winit/issues/208
                 // This solves an issue where the app would panic when minimizing on Windows.
-                if let Some(viewport_id) = viewport_id {
+                if let Some(viewport_id) = viewport_id.filter(|&id| {
+                    integration.root_window_offset(id).is_none()
+                }) {
                     if let (Some(width), Some(height)) = (
                         NonZeroU32::new(physical_size.width),
                         NonZeroU32::new(physical_size.height),
@@ -834,6 +943,7 @@ impl WgpuWinitRunning<'_> {
             .and_then(|viewport_id| {
                 shared.viewports.get_mut(&viewport_id).and_then(|viewport| {
                     Some(integration.on_window_event(
+                        viewport_id,
                         viewport.window.as_deref()?,
                         viewport.egui_winit.as_mut()?,
                         event,
@@ -902,28 +1012,6 @@ impl Viewport {
             }
         }
     }
-}
-
-fn create_window(
-    egui_ctx: &egui::Context,
-    event_loop: &ActiveEventLoop,
-    storage: Option<&dyn Storage>,
-    native_options: &mut NativeOptions,
-) -> Result<(Window, ViewportBuilder), winit::error::OsError> {
-    profiling::function_scope!();
-
-    let window_settings = epi_integration::load_window_settings(storage);
-    let viewport_builder = epi_integration::viewport_builder(
-        egui_ctx.zoom_factor(),
-        event_loop,
-        native_options,
-        window_settings,
-    )
-    .with_visible(false); // Start hidden until we render the first frame to fix white flash on startup (https://github.com/emilk/egui/pull/3631)
-
-    let window = egui_winit::create_window(egui_ctx, event_loop, &viewport_builder)?;
-    epi_integration::apply_window_settings(&window, window_settings);
-    Ok((window, viewport_builder))
 }
 
 fn render_immediate_viewport(
@@ -1139,6 +1227,8 @@ fn initialize_or_update_viewport<'a>(
                 deferred_commands: vec![],
                 info: Default::default(),
                 actions_requested: HashSet::new(),
+                capture_deadline: None,
+                root_surface_size: None,
                 viewport_ui_cb,
                 window: None,
                 egui_winit: None,

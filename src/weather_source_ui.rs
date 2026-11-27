@@ -262,7 +262,12 @@ impl App {
             });
             if !self.weather_source.config_open {self.weather_source.connection_status(ui);}
             if self.weather_source.config_open {
-                ui.add_space(5.0);
+                ui.add_space(6.0);
+                qweather_step(ui,1,"创建项目和 API Key");
+                step_body(ui,|ui|{
+                    settings_hint(ui,"在和风控制台创建项目和凭据：点上方「配置网站 ↗」打开控制台，照「配置教程 ↗」的 10 步图文操作。只需 GeoAPI 和天气预报两类权限。");
+                });
+                qweather_step(ui,2,"填写并测试连接");
                 ui.label(RichText::new("API Host").size(12.0));
                 let host=ui.add(egui::TextEdit::singleline(&mut self.weather_source.host).id_salt("qweather-host").hint_text("专属域名.qweatherapi.com").desired_width(f32::INFINITY));
                 ui.label(RichText::new("API Key").size(12.0));
@@ -287,7 +292,10 @@ impl App {
                     }
                 });
                 self.weather_source.connection_status(ui);
-                settings_hint(ui,"只启用 GeoAPI 和天气预报两类权限；Key 安全保存在 Windows 凭据管理器。");
+                settings_hint(ui,"Key 安全保存在 Windows 凭据管理器。");
+                ui.add_space(4.0);
+                qweather_step(ui,3,"选择城市并启用");
+                step_body(ui,|ui|{settings_hint(ui,"在下方「和风城市」搜索并添加城市，然后点「保存并启用」。和风暂不支持自动定位。");});
                 egui::CollapsingHeader::new("免费额度详情").id_salt("qweather-free-details").show(ui,|ui|{
                     ui.label("每自然月前 50,000 次免费");
                     settings_hint(ui,"同一和风开发者账号合计，GeoAPI 与天气预报共享，并非每个 Key 各享一份。超额继续按量计费，不会自动停止。");
@@ -334,7 +342,7 @@ impl App {
             input.union(arrow)
         }).inner;
         if ui.is_enabled(){
-            if self.weather_source.search_due(now){self.weather_source.search();}
+            if !ui.ctx().viewport(|viewport|viewport.ime_composing) && self.weather_source.search_due(now){self.weather_source.search();}
             let term_ready=!self.weather_source.query.trim().is_empty()&&(!self.weather_source.query.is_ascii()||self.weather_source.query.trim().len()>=2);
             if term_ready&&(!self.weather_source.search_sent||self.weather_source.search.is_some()){ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));}
             if keys.2 {if let Some(location)=self.weather_source.results.get(self.weather_source.highlighted){selected=Some(location.clone());}else{self.weather_source.search();ui.memory_mut(|m|m.open_popup(popup));}}
@@ -405,10 +413,21 @@ impl App {
             }
         });
         if active {
+            // 额度：本机用量条在上，账号免费额度说明在下；本机上限只在配置里的「免费额度详情」说明。
+            settings_label(ui,"额度");
+            settings_card(ui,|ui|{
+                let used=qweather::usage();
+                ui.horizontal(|ui|{
+                    ui.label(RichText::new("本机本月已请求").size(13.0));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{ui.label(RichText::new(format!("{used} 次")).size(13.0).strong());});
+                });
+                ui.add(egui::ProgressBar::new((used as f32/qweather::LIMIT as f32).clamp(0.0,1.0)).desired_height(6.0).fill(Color32::from_rgb(48,184,92)));
+                settings_hint(ui,"仅更新当前城市；搜索、测试、刷新和失败尝试都计入本机用量。");
+                settings_hint(ui,"和风账号每月免费额度 50,000 次，多设备与所有 Key 共享；超额继续按量计费，不会自动停止。");
+            });
+            settings_label(ui,"更新与数据");
             settings_card(ui,|ui|{
                 ui.hyperlink_to("天气数据来自 QWeather","https://www.qweather.com/");
-                settings_hint(ui,&format!("本机本月已请求 {} 次 · 仅更新当前城市",qweather::usage()));
-                settings_hint(ui,"和风账号每月免费额度 50,000 次，多设备与所有 Key 共享；超额可能收费。");
                 let(a,b)=self.weather_source.runtime.stamps();
                 settings_hint(ui,&format!("实况更新：{} · 预报更新：{}",updated_at(a),updated_at(b)));
                 settings_hint(ui,"实况约 60 分钟、预报约 6 小时刷新。降水概率为日夜较高值。");
@@ -501,4 +520,20 @@ mod tests {
         assert!(state.search_due(6.5));state.search();state.province="浙江".into();assert!(!state.search_due(7.0));assert!(state.search_due(7.5));
         state.poll(false);assert!(!state.search_due(100.0),"关闭模块后不能自动搜索");
     }
+}
+
+/// 和风配置的步骤标题：绿色圆形序号 + 加粗标题。
+fn qweather_step(ui:&mut egui::Ui,n:u8,title:&str){
+    ui.add_space(4.0);
+    ui.horizontal(|ui|{
+        let (rect,_)=ui.allocate_exact_size(egui::vec2(24.0,24.0),egui::Sense::hover());
+        ui.painter().circle_filled(rect.center(),12.0,color(ui.ctx(),Color32::from_rgb(28,51,36),Color32::from_rgb(227,244,232)));
+        ui.painter().text(rect.center(),egui::Align2::CENTER_CENTER,n.to_string(),egui::FontId::proportional(12.5),color(ui.ctx(),Color32::from_rgb(127,214,155),Color32::from_rgb(29,122,60)));
+        ui.add_space(4.0);
+        ui.label(RichText::new(title).size(13.5).strong());
+    });
+}
+/// 步骤正文：与标题文字对齐缩进。
+fn step_body(ui:&mut egui::Ui,add:impl FnOnce(&mut egui::Ui)){
+    ui.horizontal(|ui|{ui.add_space(32.0);ui.vertical(add);});
 }

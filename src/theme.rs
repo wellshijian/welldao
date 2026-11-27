@@ -13,6 +13,9 @@ use std::sync::Arc;
 pub const RED: Color32 = Color32::from_rgb(242, 48, 70);
 pub const RED_TOP: Color32 = Color32::from_rgb(253, 104, 92);
 pub const BLUE: Color32 = Color32::from_rgb(62, 172, 248);
+/// “已连接”蓝：蓝牙连接提醒和无电量设备的连接环共用，不在电量的绿黄橙红里。
+pub const LINK: Color32 = Color32::from_rgb(10, 132, 255);
+pub const LINK_SOFT: Color32 = Color32::from_rgb(90, 169, 255);
 pub const BLUE_DEEP: Color32 = Color32::from_rgb(13, 69, 128);
 pub const CYAN: Color32 = Color32::from_rgb(102, 219, 255);
 pub const SOFT_GREEN: Color32 = Color32::from_rgb(118, 196, 151);
@@ -30,6 +33,8 @@ pub const TRACK: Color32 = Color32::from_rgb(36, 36, 39);
 pub const ARROW_BG: Color32 = Color32::from_rgb(48, 48, 51);
 pub const WATER_TRACK: Color32 = Color32::from_rgb(15, 38, 64);
 pub const YELLOW: Color32 = Color32::from_rgb(255, 196, 61);
+/// 无线设备电量 10–19%：介于黄色“一般”和红色“即将耗尽”之间。
+pub const ORANGE: Color32 = Color32::from_rgb(255, 138, 61);
 
 pub fn alpha_blue(a: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(BLUE.r(), BLUE.g(), BLUE.b(), (255.0 * a) as u8)
@@ -114,6 +119,67 @@ pub fn load_fonts(ctx: &egui::Context) {
     ctx.set_fonts(shared_fonts().clone());
 }
 
+#[cfg(feature = "sdk-js")]
+pub(crate) fn sync_canvas_fonts(
+    ctx: &egui::Context,
+    active: std::collections::BTreeMap<String, Arc<FontData>>,
+) {
+    let changed = ctx.data_mut(|data| {
+        let previous = data.get_temp_mut_or_default::<std::collections::BTreeMap<String, Arc<FontData>>>(
+            egui::Id::new("canvas-fonts-active"),
+        );
+        if previous.len() == active.len() && active.iter().all(|(name, font)| {
+            previous.get(name).is_some_and(|installed| Arc::ptr_eq(installed, font))
+        }) {
+            return false;
+        }
+        *previous = active.clone();
+        true
+    });
+    if changed {
+        let mut definitions = ctx.fonts(|fonts| fonts.lock().fonts.definitions().clone());
+        definitions.font_data.retain(|name, _| !name.starts_with("plugin:"));
+        definitions.families.retain(|family, _| !canvas_font_family(family));
+        let fallback = definitions.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+        for (name, font) in active {
+            let mut family = vec![name.clone()];
+            family.extend(fallback.iter().cloned());
+            definitions.families.insert(FontFamily::Name(name.clone().into()), family);
+            definitions.font_data.insert(name, font);
+        }
+        ctx.set_fonts(definitions);
+    }
+}
+
+#[cfg(feature = "sdk-js")]
+pub(crate) fn canvas_font_family(family: &FontFamily) -> bool {
+    matches!(family, FontFamily::Name(name) if name.starts_with("plugin:"))
+}
+
+#[cfg(feature = "sdk-js")]
+pub(crate) fn canvas_font(
+    size: f32,
+    weight: W,
+    name: Option<&str>,
+    installed: &[FontFamily],
+) -> FontId {
+    if let Some(name) = name {
+        let family = FontFamily::Name(format!("plugin:{name}").into());
+        if installed.contains(&family) {
+            return FontId::new(size, family);
+        }
+    }
+    font(size, weight)
+}
+
+/// 测试导出「修复前」对照图：去掉藏文字体后的字体表。
+#[cfg(test)]
+pub(crate) fn fonts_without_tibetan()->FontDefinitions {
+    let mut fonts=shared_fonts().clone();
+    for list in fonts.families.values_mut() {list.retain(|key|key!="tibetan");}
+    fonts
+}
+
 fn shared_fonts()->&'static FontDefinitions {
     static FONTS:std::sync::OnceLock<FontDefinitions>=std::sync::OnceLock::new();
     FONTS.get_or_init(build_fonts)
@@ -145,6 +211,9 @@ fn font_bytes(path:&Path)->Option<&'static [u8]>{
     Some(Box::leak(std::fs::read(path).ok()?.into_boxed_slice()))
 }
 
+/// 微软喜马拉雅体的字形比同字号的中文小一圈，放大后藏文与中文、英文大致等高。
+const TIBETAN_SCALE: f32 = 1.35;
+
 fn build_fonts()->FontDefinitions {
     let dirs = font_dirs();
     let latin = [
@@ -162,6 +231,10 @@ fn build_fonts()->FontDefinitions {
         find(&[("malgun.ttf", 0), ("NotoSansKR-Regular.otf", 0), ("NotoSansCJK-Regular.ttc", 1)], &dirs),
         find(&[("malgunbd.ttf", 0), ("malgun.ttf", 0), ("NotoSansKR-Bold.otf", 0), ("NotoSansCJK-Bold.ttc", 1)], &dirs),
     ];
+
+    // 藏文：前面几种字体都没有藏文字形（#200）。微软喜马拉雅体的下加字、元音符号本身不占宽度、叠在前一个字上，
+    // 不做复杂排版也能拼出常见的叠字；它的字形偏小，放大到与中文大致等高。只有一档字重，三档共用。
+    let tibetan = find(&[("himalaya.ttf", 0), ("NotoSerifTibetan-Regular.ttf", 0), ("NotoSansTibetan-Regular.ttf", 0)], &dirs);
 
     let mut fonts = FontDefinitions::default();
     let mut cache: Vec<(PathBuf, u32, String)> = Vec::new();
@@ -194,6 +267,12 @@ fn build_fonts()->FontDefinitions {
         if let Some(k) = add(&mut fonts, &korean[usize::from(i > 0)], format!("korean{i}")) {
             list.push(k);
         }
+        if let Some(k) = add(&mut fonts, &tibetan, "tibetan".into()) {
+            if let Some(data) = fonts.font_data.get_mut(&k) {
+                if data.tweak.scale == 1.0 { Arc::make_mut(data).tweak.scale = TIBETAN_SCALE; }
+            }
+            list.push(k);
+        }
         list.extend(builtin.iter().cloned());
         fonts.families.insert(fam.clone(), list);
     }
@@ -221,6 +300,26 @@ mod tests {
                 let font=super::font(14.0,weight);
                 for ch in "눈, 코, 입 향기로운 숨을 담은 너의 코 사랑해 眼鼻嘴 TAEYANG ㄱㄴㅏ".chars().filter(|c|!c.is_whitespace()){
                     assert!(ctx.fonts(|f|f.has_glyph(&font,ch)),"缺少字形：{ch}，字体：{font:?}");
+                }
+            }
+        });
+    }
+
+    /// #200：维语歌词转换后用到的连写字形、藏文歌词，在三档字重下都要有字形（不能显示成方框）。
+    #[cfg(windows)]
+    #[test]
+    fn uyghur_and_tibetan_lyrics_have_glyphs_in_all_weights(){
+        let ctx=eframe::egui::Context::default();
+        super::load_fonts(&ctx);
+        // 覆盖维语全部字母：每个字母在词首、词中、词尾、独立各出现一次。
+        let uyghur="سوي گۈ دىگەن شۇنداق بولامدۇ يايرىم سېنى سېغىندىم شۇنچە ئا ئە ب پ ت ج چ خ د ر ز ژ س ش غ ف ق ك گ ڭ ل م ن ھ و ۇ ۆ ۈ ۋ ې ى ي ئ لا بلا بەبە بۆبۆ بڭب بھب بېب بىب";
+        let shown=crate::rtl_text::display(uyghur).into_owned();
+        let tibetan="བཀྲ་ཤིས་བདེ་ལེགས། སྐྱིད་པོ། གྲོགས་པོ། ཁྱེད་རང་།";
+        let _=ctx.run(Default::default(),|ctx|{
+            for weight in [super::W::Regular,super::W::Semibold,super::W::Bold]{
+                let font=super::font(14.0,weight);
+                for ch in shown.chars().chain(tibetan.chars()).filter(|c|!c.is_whitespace()){
+                    assert!(ctx.fonts(|f|f.has_glyph(&font,ch)),"缺少字形：U+{:04X}，字体：{font:?}",ch as u32);
                 }
             }
         });
