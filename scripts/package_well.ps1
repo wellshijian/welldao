@@ -9,7 +9,7 @@ try {
     if (-not $SkipBuild) {
         Write-Host "Building release binary wellshijian.exe..."
         $ErrorActionPreference = 'Continue'
-        cargo build --release --bin wellshijian
+        cargo build --release --features sdk-js,sdk-material --bin wellshijian
         $exitCode = $LASTEXITCODE
         $ErrorActionPreference = 'Stop'
         if ($exitCode -ne 0) { throw 'Release build failed' }
